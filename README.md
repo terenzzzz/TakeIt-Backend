@@ -5,7 +5,7 @@
 ## 技术栈
 
 - **Node.js** + **Express** — HTTP 服务
-- **axios** — 常规 HTTP 请求（PPT.cc、Twitter、下载代理）
+- **axios** — 常规 HTTP 请求（PPT.cc、Twitter、抖音、下载代理）
 - **curl-cffi-node** — 浏览器指纹模拟，绕过 MyPPT / LURL 的 Cloudflare 防护
 - **cheerio** — HTML 解析与媒体 URL 提取
 - **express-rate-limit** — API 速率限制
@@ -38,13 +38,16 @@ src/
 ├── extractors/           # 各平台解析器
 │   ├── myppt-lurl.js     # MyPPT / LURL 共用逻辑（密码解锁、媒体提取）
 │   ├── pptcc.js          # PPT.cc 解析
-│   └── twitter.js        # Twitter/X 解析（fxtwitter API）
+│   ├── twitter.js        # Twitter/X 解析（fxtwitter API）
+│   └── douyin.js         # 抖音解析
 ├── services/
 │   ├── detector.js       # 平台识别
 │   ├── fetcher.js        # axios 请求封装
 │   ├── impersonatedHttp.js  # curl-cffi 浏览器模拟请求
 │   └── shortlinkHttp.js  # 短链页面抓取与密码解锁
-└── utils/                # URL、文件名、密码工具函数
+└── utils/
+    ├── douyin.js         # 抖音短链解析、ttwid 会话、Web API 提取
+    └── ...               # URL、文件名、密码等工具函数
 ```
 
 ## API 端点
@@ -72,7 +75,7 @@ src/
 
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|------|------|
-| `url` | string | 是 | 分享链接（可省略 `https://` 前缀） |
+| `url` | string | 是 | 分享链接，或包含链接的分享文案（如抖音复制粘贴的整段文字） |
 | `password` | string | 否 | 页面访问密码；省略时 MyPPT / LURL 会尝试从页面日期自动推断 |
 
 **成功响应**
@@ -95,7 +98,7 @@ src/
 
 | 字段 | 说明 |
 |------|------|
-| `platform` | 平台标识：`myppt` / `lurl` / `pptcc` / `twitter` |
+| `platform` | 平台标识：`myppt` / `lurl` / `pptcc` / `twitter` / `douyin` |
 | `needsPassword` | 页面需要密码且尚未解锁时为 `true`，此时 `media` 为空 |
 | `media[].type` | 媒体类型：`image` / `video` / `audio` |
 
@@ -134,6 +137,7 @@ GET /api/download?url=<encoded_url>&filename=<name>&inline=<0|1>
 | LURL | lurl.cc | 图片、视频 | 同 MyPPT |
 | PPT.cc | ppt.cc | 图片、视频 | HTML 解析，从 `<video>` / `<img>` / 脚本中提取 |
 | Twitter/X | twitter.com, x.com, mobile.twitter.com | 图片、视频 | 通过 [fxtwitter](https://api.fxtwitter.com) API 解析，自动选取最高码率 MP4 |
+| 抖音 | douyin.com, v.douyin.com, iesdouyin.com | 图片、视频 | 短链跳转提取作品 ID；ttwid 注册 + Web Detail API；支持整段分享文案 |
 
 ## 核心机制
 
@@ -143,6 +147,14 @@ GET /api/download?url=<encoded_url>&filename=<name>&inline=<0|1>
 2. 若页面含 `encrypt_pass` 表单，向 `/session.php` 提交密码解锁
 3. 未提供密码时，从页面文本中提取日期（如 `2024/01/15`）并生成 `MMDD` 变体自动尝试
 4. 解锁失败或需手动输入时返回 `needsPassword: true`
+
+### 抖音解析
+
+1. 从输入中提取抖音链接（支持 `v.douyin.com` 短链及整段分享文案）
+2. 跟随短链跳转，解析作品 `aweme_id`
+3. 注册 `ttwid` 并访问 `douyin.com/video/{id}` 建立会话
+4. 调用 Douyin Web Detail API 获取标题、封面与播放地址
+5. 视频优先使用无水印 `aweme.snssdk.com` 播放接口；图集返回原图列表
 
 ### 媒体提取
 
