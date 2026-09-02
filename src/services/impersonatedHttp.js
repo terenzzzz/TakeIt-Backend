@@ -93,3 +93,37 @@ export async function postFormImpersonated(url, data, options = {}) {
     status: response.status,
   }
 }
+
+export async function fetchBinaryImpersonated(url, options = {}) {
+  const client = await getSession()
+  const response = await client.get(url, {
+    headers: {
+      Accept: 'video/mp4,video/*;q=0.9,application/octet-stream;q=0.8,image/*,*/*;q=0.7',
+      Referer: options.referer,
+      ...options.headers,
+    },
+    timeout: options.timeout || 300,
+  })
+
+  if (!response.ok) {
+    const err = new Error(`下载失败 (${response.status})`)
+    err.code = 'DOWNLOAD_FAILED'
+    throw err
+  }
+
+  const contentType = response.headers.get('content-type') || ''
+  if (contentType.includes('text/html')) {
+    const err = new Error('下载失败，目标站点拒绝了请求')
+    err.code = 'DOWNLOAD_FAILED'
+    throw err
+  }
+
+  return {
+    data: response.content,
+    headers: {
+      'content-type': contentType,
+      'content-length': response.headers.get('content-length'),
+    },
+    status: response.status,
+  }
+}

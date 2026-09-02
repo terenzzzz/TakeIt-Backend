@@ -15,6 +15,16 @@ const client = axios.create({
   proxy: false,
 })
 
+const downloadClient = axios.create({
+  timeout: 300000,
+  maxRedirects: 5,
+  validateStatus: (status) => status < 500,
+  proxy: false,
+  maxContentLength: Infinity,
+  maxBodyLength: Infinity,
+  decompress: true,
+})
+
 export async function fetchHtml(url, options = {}) {
   const response = await client.get(url, {
     headers: { ...DEFAULT_HEADERS, ...options.headers },
@@ -49,14 +59,15 @@ export async function postForm(url, data, options = {}) {
 
 export async function fetchStream(url, options = {}) {
   const referer = getRefererForUrl(url)
-  const response = await client.get(url, {
+  const response = await downloadClient.get(url, {
     headers: {
       ...DEFAULT_HEADERS,
-      Accept: 'image/avif,image/webp,image/apng,image/*,video/*,*/*;q=0.8',
+      Accept: '*/*',
       ...(referer ? { Referer: referer } : {}),
       ...options.headers,
     },
     responseType: 'stream',
+    timeout: options.timeout || 300000,
     ...options,
   })
   return response
@@ -74,4 +85,17 @@ function getRefererForUrl(url) {
   return undefined
 }
 
-export { DEFAULT_HEADERS }
+export function needsImpersonatedDownload(url) {
+  try {
+    const hostname = new URL(url).hostname.toLowerCase()
+    return (
+      hostname.includes('lurl.cc') ||
+      hostname.includes('myppt.cc') ||
+      hostname.includes('r2limit')
+    )
+  } catch {
+    return false
+  }
+}
+
+export { DEFAULT_HEADERS, getRefererForUrl }

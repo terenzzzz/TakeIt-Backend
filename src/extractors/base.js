@@ -17,7 +17,7 @@ export class BaseExtractor {
       media: media.map((item, index) => ({
         type: item.type,
         url: item.url,
-        thumbnail: item.thumbnail || item.url,
+        thumbnail: item.type === 'video' ? item.thumbnail : (item.thumbnail || item.url),
         filename: item.filename || buildMediaFilename(item.url, item.type, index),
       })),
     }

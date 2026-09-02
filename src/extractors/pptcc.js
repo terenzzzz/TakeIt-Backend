@@ -13,14 +13,21 @@ export class PptccExtractor extends BaseExtractor {
     const $ = cheerio.load(html)
     const title = $('title').text().trim() || 'PPT.cc Media'
     const media = []
+    const ogImage =
+      $('meta[property="og:image"]').attr('content') ||
+      $('meta[name="twitter:image"]').attr('content')
+    const ogThumb = ogImage ? resolveUrl(finalUrl, ogImage) : null
 
     $('video').each((_, el) => {
+      const poster = $(el).attr('poster')
+      const posterThumb = poster ? resolveUrl(finalUrl, poster) : ogThumb
       const src = $(el).attr('src')
       if (src) {
         media.push({
           type: 'video',
           url: resolveUrl(finalUrl, src),
           filename: `${title}.mp4`,
+          ...(posterThumb ? { thumbnail: posterThumb } : {}),
         })
       }
       $(el)
@@ -32,6 +39,7 @@ export class PptccExtractor extends BaseExtractor {
               type: 'video',
               url: resolveUrl(finalUrl, s),
               filename: `${title}.mp4`,
+              ...(posterThumb ? { thumbnail: posterThumb } : {}),
             })
           }
         })
@@ -60,6 +68,7 @@ export class PptccExtractor extends BaseExtractor {
         type: 'video',
         url: videoMatch[0],
         filename: `${title}.mp4`,
+        ...(ogThumb ? { thumbnail: ogThumb } : {}),
       })
     }
 
