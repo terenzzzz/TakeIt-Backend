@@ -1,6 +1,6 @@
 import { Router } from 'express'
 import { detectPlatform, normalizeUrl } from '../services/detector.js'
-import { isValidUrl } from '../utils/url.js'
+import { extractUrlFromText, isValidUrl } from '../utils/url.js'
 import { getExtractor } from '../extractors/index.js'
 import { fetchStream, needsImpersonatedDownload, getRefererForUrl } from '../services/fetcher.js'
 import { fetchBinaryImpersonated } from '../services/impersonatedHttp.js'
@@ -21,12 +21,13 @@ const ERROR_MESSAGES = {
 
 router.post('/extract', async (req, res) => {
   const { url, password } = req.body || {}
+  const resolvedUrl = extractUrlFromText(url) || (typeof url === 'string' ? url.trim() : '')
 
-  if (!url || !isValidUrl(url)) {
+  if (!resolvedUrl || !isValidUrl(resolvedUrl)) {
     return res.status(400).json({ error: 'INVALID_URL', message: ERROR_MESSAGES.INVALID_URL })
   }
 
-  const platform = detectPlatform(url)
+  const platform = detectPlatform(resolvedUrl)
   if (!platform) {
     return res.status(400).json({
       error: 'UNSUPPORTED_PLATFORM',
@@ -43,7 +44,7 @@ router.post('/extract', async (req, res) => {
   }
 
   try {
-    const result = await extractor.extract(normalizeUrl(url), { password })
+    const result = await extractor.extract(normalizeUrl(resolvedUrl), { password })
     return res.json(result)
   } catch (err) {
     const code = normalizeErrorCode(err)

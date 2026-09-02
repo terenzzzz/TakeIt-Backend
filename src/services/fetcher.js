@@ -79,6 +79,15 @@ function getRefererForUrl(url) {
     if (hostname.includes('lurl.cc')) return 'https://lurl.cc/'
     if (hostname.includes('myppt.cc')) return 'https://myppt.cc/'
     if (hostname.includes('ppt.cc')) return 'https://ppt.cc/'
+    if (
+      hostname.includes('douyin') ||
+      hostname.includes('douyinvod') ||
+      hostname.includes('snssdk.com') ||
+      hostname.includes('bytecdn') ||
+      hostname.includes('ixigua.com')
+    ) {
+      return 'https://www.douyin.com/'
+    }
   } catch {
     return undefined
   }
