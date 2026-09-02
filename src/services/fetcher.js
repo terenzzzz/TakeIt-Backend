@@ -88,6 +88,13 @@ function getRefererForUrl(url) {
     ) {
       return 'https://www.douyin.com/'
     }
+    if (
+      hostname.includes('xiaohongshu.com') ||
+      hostname.includes('xhscdn.com') ||
+      hostname.includes('xhslink.')
+    ) {
+      return 'https://www.xiaohongshu.com/'
+    }
   } catch {
     return undefined
   }

@@ -6,6 +6,11 @@ const PLATFORMS = [
   { id: 'pptcc', name: 'PPT.cc', hosts: ['ppt.cc'] },
   { id: 'twitter', name: 'Twitter/X', hosts: ['twitter.com', 'x.com', 'mobile.twitter.com'] },
   { id: 'douyin', name: '抖音', hosts: ['douyin.com', 'iesdouyin.com'] },
+  {
+    id: 'xiaohongshu',
+    name: '小红书',
+    hosts: ['xiaohongshu.com', 'xhslink.com', 'xhslink.cn', 'rednote.com'],
+  },
 ]
 
 function hostMatches(hostname, hosts) {

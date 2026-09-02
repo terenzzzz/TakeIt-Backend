@@ -39,7 +39,8 @@ src/
 │   ├── myppt-lurl.js     # MyPPT / LURL 共用逻辑（密码解锁、媒体提取）
 │   ├── pptcc.js          # PPT.cc 解析
 │   ├── twitter.js        # Twitter/X 解析（fxtwitter API）
-│   └── douyin.js         # 抖音解析
+│   ├── douyin.js         # 抖音解析
+│   └── xiaohongshu.js    # 小红书解析
 ├── services/
 │   ├── detector.js       # 平台识别
 │   ├── fetcher.js        # axios 请求封装
@@ -47,6 +48,7 @@ src/
 │   └── shortlinkHttp.js  # 短链页面抓取与密码解锁
 └── utils/
     ├── douyin.js         # 抖音短链解析、ttwid 会话、Web API 提取
+    ├── xiaohongshu.js    # 小红书短链解析、INITIAL_STATE 提取
     └── ...               # URL、文件名、密码等工具函数
 ```
 
@@ -98,7 +100,7 @@ src/
 
 | 字段 | 说明 |
 |------|------|
-| `platform` | 平台标识：`myppt` / `lurl` / `pptcc` / `twitter` / `douyin` |
+| `platform` | 平台标识：`myppt` / `lurl` / `pptcc` / `twitter` / `douyin` / `xiaohongshu` |
 | `needsPassword` | 页面需要密码且尚未解锁时为 `true`，此时 `media` 为空 |
 | `media[].type` | 媒体类型：`image` / `video` / `audio` |
 
@@ -138,6 +140,7 @@ GET /api/download?url=<encoded_url>&filename=<name>&inline=<0|1>
 | PPT.cc | ppt.cc | 图片、视频 | HTML 解析，从 `<video>` / `<img>` / 脚本中提取 |
 | Twitter/X | twitter.com, x.com, mobile.twitter.com | 图片、视频 | 通过 [fxtwitter](https://api.fxtwitter.com) API 解析，自动选取最高码率 MP4 |
 | 抖音 | douyin.com, v.douyin.com, iesdouyin.com | 图片、视频 | 短链跳转提取作品 ID；ttwid 注册 + Web Detail API；支持整段分享文案 |
+| 小红书 | xiaohongshu.com, xhslink.com, xhslink.cn, rednote.com | 图片、视频 | 短链跳转；解析页面 `INITIAL_STATE`；支持整段分享文案 |
 
 ## 核心机制
 
@@ -155,6 +158,13 @@ GET /api/download?url=<encoded_url>&filename=<name>&inline=<0|1>
 3. 注册 `ttwid` 并访问 `douyin.com/video/{id}` 建立会话
 4. 调用 Douyin Web Detail API 获取标题、封面与播放地址
 5. 视频优先使用无水印 `aweme.snssdk.com` 播放接口；图集返回原图列表
+
+### 小红书解析
+
+1. 从输入中提取小红书链接（支持 `xhslink.com` / `xhslink.cn` 短链及整段分享文案）
+2. 使用 curl-cffi 跟随短链跳转到笔记页
+3. 解析页面中的 `window.__INITIAL_STATE__` 数据
+4. 图集返回 `imageList` 中的高清图片；视频优先使用 `originVideoKey` 构建无水印地址
 
 ### 媒体提取
 
