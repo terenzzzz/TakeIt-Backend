@@ -44,13 +44,21 @@ Content-Type：`application/json`（除下载接口返回二进制流）
 
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|------|------|
-| `url` | `string` | 是 | 分享链接；可省略 `https://` 前缀 |
+| `url` | `string` | 是 | 分享链接；可省略 `https://` 前缀。也支持粘贴整段分享文案（如抖音 / 小红书复制内容），服务端会自动从文案中提取 URL |
 | `password` | `string` | 否 | 页面访问密码。MyPPT / LURL 未传时会尝试从页面日期自动推断 |
 
 ```json
 {
   "url": "https://lurl.cc/xxx",
   "password": "0115"
+}
+```
+
+分享文案示例：
+
+```json
+{
+  "url": "0.52 复制打开抖音，看看【xxx】的作品 https://v.douyin.com/xxxxx/ 你好呀"
 }
 ```
 
@@ -74,13 +82,13 @@ Content-Type：`application/json`（除下载接口返回二进制流）
 
 | 字段 | 类型 | 说明 |
 |------|------|------|
-| `platform` | `string` | 平台标识：`myppt` / `lurl` / `pptcc` / `twitter` |
-| `title` | `string` | 页面或推文标题 |
+| `platform` | `string` | 平台标识：`myppt` / `lurl` / `pptcc` / `twitter` / `douyin` / `xiaohongshu` |
+| `title` | `string` | 页面、笔记或推文标题 |
 | `needsPassword` | `boolean` | 需要密码且尚未解锁时为 `true`，此时 `media` 为空数组 |
 | `media` | `array` | 媒体列表 |
 | `media[].type` | `string` | `image` / `video` / `audio` |
 | `media[].url` | `string` | 媒体直链 |
-| `media[].thumbnail` | `string` | 缩略图；无则回退为 `url` |
+| `media[].thumbnail` | `string` | 缩略图；图片无缩略图时回退为 `url`；视频可能为空 |
 | `media[].filename` | `string` | 建议下载文件名 |
 
 #### 错误响应
@@ -96,7 +104,7 @@ Content-Type：`application/json`（除下载接口返回二进制流）
 
 | HTTP | `error` | `message` | 说明 |
 |------|---------|-----------|------|
-| `400` | `INVALID_URL` | 请输入有效的分享链接 | URL 缺失或格式无效 |
+| `400` | `INVALID_URL` | 请输入有效的分享链接 | URL 缺失、格式无效，或文案中未提取到有效链接 |
 | `400` | `UNSUPPORTED_PLATFORM` | 暂不支持该平台，敬请期待 | 域名不在支持列表 |
 | `401` | `PASSWORD_FAILED` | 密码不正确，请重试 | 提供的密码错误 |
 | `410` | `EXPIRED` | 该链接可能已过期或失效 | 链接失效 / 404 |
@@ -109,9 +117,20 @@ Content-Type：`application/json`（除下载接口返回二进制流）
 #### 调用示例
 
 ```bash
+# 普通链接
 curl -X POST http://localhost:3001/api/extract \
   -H 'Content-Type: application/json' \
   -d '{"url":"https://ppt.cc/xxx","password":"0115"}'
+
+# 抖音短链 / 分享文案
+curl -X POST http://localhost:3001/api/extract \
+  -H 'Content-Type: application/json' \
+  -d '{"url":"https://v.douyin.com/xxxxx/"}'
+
+# 小红书
+curl -X POST http://localhost:3001/api/extract \
+  -H 'Content-Type: application/json' \
+  -d '{"url":"https://www.xiaohongshu.com/explore/xxxxx"}'
 ```
 
 ---
@@ -121,6 +140,8 @@ curl -X POST http://localhost:3001/api/extract \
 ### `GET /api/download`
 
 代理拉取媒体直链，解决前端跨域与 Referer 限制，以流式响应返回文件。
+
+普通资源走 axios 流式转发；部分需浏览器指纹的资源（如部分 CDN）会回退到 curl-cffi 模拟下载。
 
 #### Query 参数
 
@@ -137,6 +158,7 @@ curl -X POST http://localhost:3001/api/extract \
   - `Content-Type`：上游返回的 MIME（如有）
   - `Content-Length`：上游返回的长度（如有）
   - `Content-Disposition`：`attachment` 或 `inline`，附带文件名
+  - `X-Accel-Buffering: no`：便于反向代理关闭缓冲
 
 #### 错误响应
 
@@ -175,6 +197,10 @@ const downloadUrl =
 | LURL | `lurl` | `lurl.cc` | 同 MyPPT |
 | PPT.cc | `pptcc` | `ppt.cc` | HTML 解析提取媒体 |
 | Twitter/X | `twitter` | `twitter.com` / `x.com` / `mobile.twitter.com` | 经 fxtwitter API 解析 |
+| 抖音 | `douyin` | `douyin.com` / `v.douyin.com` / `iesdouyin.com` | 短链跳转 + ttwid 会话 + Web Detail API；支持整段分享文案 |
+| 小红书 | `xiaohongshu` | `xiaohongshu.com` / `xhslink.com` / `xhslink.cn` / `rednote.com` | 短链跳转 + `INITIAL_STATE` 解析；支持整段分享文案 |
+
+子域名匹配：如 `www.douyin.com`、`www.xiaohongshu.com` 等均可识别。
 
 ---
 
@@ -183,4 +209,5 @@ const downloadUrl =
 1. **CORS**：默认允许源为 `http://localhost:5173`，可通过环境变量 `CORS_ORIGIN` 配置。
 2. **错误体**：失败时均为 `{ error, message }`；成功时 `/api/extract` 返回业务对象，`/api/download` 返回文件流。
 3. **密码流程**：若 `/api/extract` 返回 `needsPassword: true`，前端应提示用户输入密码后再次请求，并带上 `password` 字段。
-4. **下载建议**：优先使用 `/api/download` 代理，避免浏览器直连源站失败。
+4. **分享文案**：`url` 可为整段文本，服务端用正则提取其中第一个有效 HTTP(S) 链接后再识别平台。
+5. **下载建议**：优先使用 `/api/download` 代理，避免浏览器直连源站失败。
