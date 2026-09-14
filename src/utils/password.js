@@ -123,13 +123,17 @@ export function extractMediaFromHtml(html, baseUrl) {
   }
 
   $('video').each((_, el) => {
+    const poster = $(el).attr('poster')
+    const posterThumb = poster ? resolve(baseUrl, poster) : null
     const src = $(el).attr('src')
-    if (src) add('video', resolve(baseUrl, src))
+    if (src) {
+      add('video', resolve(baseUrl, src), posterThumb ? { thumbnail: posterThumb } : {})
+    }
     $(el)
       .find('source')
       .each((__, source) => {
         const s = $(source).attr('src')
-        if (s) add('video', resolve(baseUrl, s))
+        if (s) add('video', resolve(baseUrl, s), posterThumb ? { thumbnail: posterThumb } : {})
       })
   })
 
@@ -156,11 +160,27 @@ export function extractMediaFromHtml(html, baseUrl) {
     }
   })
 
-  const embeddedUrls = html.match(/https?:\/\/[^'"\s>]+\.(?:jpe?g|png|gif|webp|mp4|m3u8|webm)/gi) || []
+  const embeddedUrls = html.match(/https?:\/\/[^'"\s>]+\.(?:jpe?g|png|gif|webp|mp4|m3u8|webm|mov)/gi) || []
   for (const embeddedUrl of embeddedUrls) {
     if (/logo|icon|18-plus|\/app\//i.test(embeddedUrl)) continue
-    const type = /\.(mp4|m3u8|webm)(\?|$)/i.test(embeddedUrl) ? 'video' : 'image'
-    add(type, embeddedUrl, { thumbnail: embeddedUrl })
+    const type = /\.(mp4|m3u8|webm|mov)(\?|$)/i.test(embeddedUrl) ? 'video' : 'image'
+    if (type === 'video') {
+      add(type, embeddedUrl)
+    } else {
+      add(type, embeddedUrl, { thumbnail: embeddedUrl })
+    }
+  }
+
+  const ogImage =
+    $('meta[property="og:image"]').attr('content') ||
+    $('meta[name="twitter:image"]').attr('content')
+  if (ogImage) {
+    const ogThumb = resolve(baseUrl, ogImage)
+    for (const item of media) {
+      if (item.type === 'video' && !item.thumbnail) {
+        item.thumbnail = ogThumb
+      }
+    }
   }
 
   return media
@@ -173,8 +193,8 @@ export function mediaFromCapturedUrls(urls = []) {
   for (const url of urls) {
     if (!url || seen.has(url) || /logo|icon|18-plus|\/app\//i.test(url)) continue
     seen.add(url)
-    const type = /\.(mp4|m3u8|webm)(\?|$)/i.test(url) ? 'video' : 'image'
-    media.push({ type, url, thumbnail: url })
+    const type = /\.(mp4|m3u8|webm|mov)(\?|$)/i.test(url) ? 'video' : 'image'
+    media.push(type === 'video' ? { type, url } : { type, url, thumbnail: url })
   }
 
   return media

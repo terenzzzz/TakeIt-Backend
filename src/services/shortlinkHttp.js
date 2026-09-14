@@ -4,14 +4,26 @@ import {
   isCloudflareBlocked,
   postFormImpersonated,
 } from './impersonatedHttp.js'
-import { detectPageStatus, extractDatePasswords } from '../utils/password.js'
+import { detectPageStatus, extractDatePasswords, extractMediaFromHtml } from '../utils/password.js'
 
 const MEDIA_URL_PATTERN =
-  /https?:\/\/[^'"\s>]*r2limit\.[^'"\s>]+\.(?:jpe?g|png|webp|gif|mp4|m3u8|webm)/gi
+  /https?:\/\/[^'"\s>]*(?:r2limit|lurl\d*\.lurl\.cc|myppt)[^'"\s>]*\.(?:jpe?g|png|webp|gif|mp4|m3u8|webm|mov)/gi
 
 function extractMediaUrls(html) {
   const matches = html.match(MEDIA_URL_PATTERN) || []
   return [...new Set(matches)]
+}
+
+function collectPageMedia(html, baseUrl) {
+  const urls = new Set(extractMediaUrls(html))
+  for (const item of extractMediaFromHtml(html, baseUrl)) {
+    if (item.url) urls.add(item.url)
+  }
+  return [...urls]
+}
+
+function pageHasMedia(html, baseUrl) {
+  return collectPageMedia(html, baseUrl).length > 0
 }
 
 function parseUnlockForm(html) {
@@ -62,7 +74,7 @@ async function unlockWithPassword(pageUrl, form, password) {
   return {
     ok: true,
     ...reloaded,
-    mediaUrls: extractMediaUrls(reloaded.html),
+    mediaUrls: collectPageMedia(reloaded.html, reloaded.finalUrl || pageUrl),
   }
 }
 
@@ -82,7 +94,7 @@ export async function extractShortLinkPage(url, { password } = {}) {
     throw err
   }
 
-  const initialMedia = extractMediaUrls(initial.html)
+  const initialMedia = collectPageMedia(initial.html, initial.finalUrl || url)
   if (initialMedia.length > 0) {
     return {
       html: initial.html,
@@ -112,7 +124,7 @@ export async function extractShortLinkPage(url, { password } = {}) {
       continue
     }
 
-    if (unlocked.mediaUrls.length > 0) {
+    if (pageHasMedia(unlocked.html, unlocked.finalUrl || url)) {
       return {
         html: unlocked.html,
         finalUrl: unlocked.finalUrl,

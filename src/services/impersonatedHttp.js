@@ -1,14 +1,27 @@
-import { Session } from 'curl-cffi-node'
 import { brotliDecompressSync, gunzipSync, inflateSync } from 'zlib'
 
 const USER_AGENT =
   'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
 
 let session = null
+let SessionClass = null
 
-function getSession() {
+async function getSession() {
+  if (!SessionClass) {
+    try {
+      const mod = await import('curl-cffi-node')
+      SessionClass = mod.Session
+    } catch (err) {
+      const error = new Error(
+        'curl-cffi-node 原生模块加载失败，MyPPT/LURL 解析不可用。' +
+          '请确认系统 glibc >= 2.38 或从源码编译 curl-cffi-node。'
+      )
+      error.code = 'NATIVE_MODULE_UNAVAILABLE'
+      throw error
+    }
+  }
   if (!session) {
-    session = new Session({
+    session = new SessionClass({
       impersonate: 'chrome131',
       headers: {
         'User-Agent': USER_AGENT,
@@ -46,7 +59,7 @@ function decodeBody(response) {
 }
 
 export async function fetchHtmlImpersonated(url, options = {}) {
-  const client = getSession()
+  const client = await getSession()
   const response = await client.get(url, {
     headers: options.headers,
     timeout: options.timeout || 20,
@@ -61,7 +74,7 @@ export async function fetchHtmlImpersonated(url, options = {}) {
 }
 
 export async function postFormImpersonated(url, data, options = {}) {
-  const client = getSession()
+  const client = await getSession()
   const body =
     data instanceof URLSearchParams ? data.toString() : new URLSearchParams(data).toString()
 
@@ -77,6 +90,40 @@ export async function postFormImpersonated(url, data, options = {}) {
   return {
     html: decodeBody(response),
     finalUrl: response.url || url,
+    status: response.status,
+  }
+}
+
+export async function fetchBinaryImpersonated(url, options = {}) {
+  const client = await getSession()
+  const response = await client.get(url, {
+    headers: {
+      Accept: 'video/mp4,video/*;q=0.9,application/octet-stream;q=0.8,image/*,*/*;q=0.7',
+      Referer: options.referer,
+      ...options.headers,
+    },
+    timeout: options.timeout || 300,
+  })
+
+  if (!response.ok) {
+    const err = new Error(`下载失败 (${response.status})`)
+    err.code = 'DOWNLOAD_FAILED'
+    throw err
+  }
+
+  const contentType = response.headers.get('content-type') || ''
+  if (contentType.includes('text/html')) {
+    const err = new Error('下载失败，目标站点拒绝了请求')
+    err.code = 'DOWNLOAD_FAILED'
+    throw err
+  }
+
+  return {
+    data: response.content,
+    headers: {
+      'content-type': contentType,
+      'content-length': response.headers.get('content-length'),
+    },
     status: response.status,
   }
 }
