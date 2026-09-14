@@ -1,4 +1,5 @@
 import axios from 'axios'
+import { extractUrlFromText, sanitizeShareText } from './url.js'
 
 const MOBILE_UA =
   'Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1'
@@ -140,7 +141,10 @@ async function buildDouyinSession(awemeId, forceTtwid = false) {
 }
 
 export function extractDouyinUrl(input = '') {
-  const text = input.trim()
+  const extracted = extractUrlFromText(input)
+  if (extracted) return extracted
+
+  const text = sanitizeShareText(input)
   const match = text.match(DOUYIN_URL_RE)
   if (match) return match[0]
   return text
@@ -328,11 +332,28 @@ function pickVideoUrl(item) {
   return null
 }
 
+function isWatermarkedImageUrl(url = '') {
+  return /tplv-dy-water|watermark/i.test(url)
+}
+
+function pickBestImageUrl(list = []) {
+  const urls = list.filter(Boolean)
+  if (urls.length === 0) return ''
+  const jpeg = [...urls].reverse().find((url) => /\.jpe?g(\?|$)/i.test(url))
+  return jpeg || urls[urls.length - 1]
+}
+
 function pickImageUrls(images = []) {
   const urls = []
   for (const image of images) {
-    const list = image?.url_list?.filter(Boolean) || []
-    if (list.length > 0) urls.push(list[list.length - 1])
+    const display = (image?.url_list || []).filter(Boolean)
+    const download = (image?.download_url_list || []).filter(Boolean)
+    const url =
+      pickBestImageUrl(display.filter((item) => !isWatermarkedImageUrl(item))) ||
+      pickBestImageUrl(display) ||
+      pickBestImageUrl(download.filter((item) => !isWatermarkedImageUrl(item))) ||
+      pickBestImageUrl(download)
+    if (url) urls.push(url)
   }
   return urls
 }
@@ -341,7 +362,7 @@ export function douyinItemToMedia(item, awemeId) {
   const media = []
   const title = (item.desc || '').trim()
   const author = item.author?.nickname || 'douyin'
-  const images = item.images || []
+  const images = item.images || item.image_post_info?.images || []
   const isPhoto = PHOTO_AWEME_TYPES.has(item.aweme_type) || images.length > 0
 
   if (isPhoto) {

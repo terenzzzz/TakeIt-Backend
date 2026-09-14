@@ -95,6 +95,13 @@ function getRefererForUrl(url) {
     ) {
       return 'https://www.xiaohongshu.com/'
     }
+    if (
+      hostname.includes('instagram.com') ||
+      hostname.includes('cdninstagram.com') ||
+      hostname.includes('fbcdn.net')
+    ) {
+      return 'https://www.instagram.com/'
+    }
   } catch {
     return undefined
   }

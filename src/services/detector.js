@@ -11,6 +11,11 @@ const PLATFORMS = [
     name: '小红书',
     hosts: ['xiaohongshu.com', 'xhslink.com', 'xhslink.cn', 'rednote.com'],
   },
+  {
+    id: 'instagram',
+    name: 'Instagram',
+    hosts: ['instagram.com', 'instagr.am'],
+  },
 ]
 
 function hostMatches(hostname, hosts) {

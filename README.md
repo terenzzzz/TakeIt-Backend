@@ -40,7 +40,8 @@ src/
 │   ├── pptcc.js          # PPT.cc 解析
 │   ├── twitter.js        # Twitter/X 解析（fxtwitter API）
 │   ├── douyin.js         # 抖音解析
-│   └── xiaohongshu.js    # 小红书解析
+│   ├── xiaohongshu.js    # 小红书解析
+│   └── instagram.js      # Instagram 解析
 ├── services/
 │   ├── detector.js       # 平台识别
 │   ├── fetcher.js        # axios 请求封装
@@ -49,6 +50,7 @@ src/
 └── utils/
     ├── douyin.js         # 抖音短链解析、ttwid 会话、Web API 提取
     ├── xiaohongshu.js    # 小红书短链解析、INITIAL_STATE 提取
+    ├── instagram.js      # Instagram shortcode、embed contextJSON 提取
     └── ...               # URL、文件名、密码等工具函数
 ```
 
@@ -100,7 +102,7 @@ src/
 
 | 字段 | 说明 |
 |------|------|
-| `platform` | 平台标识：`myppt` / `lurl` / `pptcc` / `twitter` / `douyin` / `xiaohongshu` |
+| `platform` | 平台标识：`myppt` / `lurl` / `pptcc` / `twitter` / `douyin` / `xiaohongshu` / `instagram` |
 | `needsPassword` | 页面需要密码且尚未解锁时为 `true`，此时 `media` 为空 |
 | `media[].type` | 媒体类型：`image` / `video` / `audio` |
 
@@ -141,6 +143,7 @@ GET /api/download?url=<encoded_url>&filename=<name>&inline=<0|1>
 | Twitter/X | twitter.com, x.com, mobile.twitter.com | 图片、视频 | 通过 [fxtwitter](https://api.fxtwitter.com) API 解析，自动选取最高码率 MP4 |
 | 抖音 | douyin.com, v.douyin.com, iesdouyin.com | 图片、视频 | 短链跳转提取作品 ID；ttwid 注册 + Web Detail API；支持整段分享文案 |
 | 小红书 | xiaohongshu.com, xhslink.com, xhslink.cn, rednote.com | 图片、视频 | 短链跳转；解析页面 `INITIAL_STATE`；支持整段分享文案 |
+| Instagram | instagram.com, instagr.am | 图片、视频 | 从 Reel / 帖子 / TV 链接提取 shortcode；解析 embed 页 `contextJSON`；支持图集 |
 
 ## 核心机制
 
@@ -165,6 +168,12 @@ GET /api/download?url=<encoded_url>&filename=<name>&inline=<0|1>
 2. 使用 curl-cffi 跟随短链跳转到笔记页
 3. 解析页面中的 `window.__INITIAL_STATE__` 数据
 4. 图集返回 `imageList` 中的高清图片；视频优先使用 `originVideoKey` 构建无水印地址
+
+### Instagram 解析
+
+1. 从输入中提取 Instagram 链接（支持 `/reel/`、`/p/`、`/tv/` 及带 `stkn` 的分享链接）
+2. 访问公开 embed 页，解析 `contextJSON` 中的 `shortcode_media`
+3. 视频使用 `video_url`；图片使用 `display_resources` 中的最高分辨率；图集遍历 sidecar 子项
 
 ### 媒体提取
 

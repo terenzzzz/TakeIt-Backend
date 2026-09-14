@@ -1,6 +1,6 @@
 import { Router } from 'express'
 import { detectPlatform, normalizeUrl } from '../services/detector.js'
-import { extractUrlFromText, isValidUrl } from '../utils/url.js'
+import { extractUrlFromText, isValidUrl, sanitizeShareText } from '../utils/url.js'
 import { getExtractor } from '../extractors/index.js'
 import { fetchStream, needsImpersonatedDownload, getRefererForUrl } from '../services/fetcher.js'
 import { fetchBinaryImpersonated } from '../services/impersonatedHttp.js'
@@ -21,7 +21,7 @@ const ERROR_MESSAGES = {
 
 router.post('/extract', async (req, res) => {
   const { url, password } = req.body || {}
-  const resolvedUrl = extractUrlFromText(url) || (typeof url === 'string' ? url.trim() : '')
+  const resolvedUrl = extractUrlFromText(url) || (typeof url === 'string' ? sanitizeShareText(url) : '')
 
   if (!resolvedUrl || !isValidUrl(resolvedUrl)) {
     return res.status(400).json({ error: 'INVALID_URL', message: ERROR_MESSAGES.INVALID_URL })
@@ -56,6 +56,16 @@ router.post('/extract', async (req, res) => {
   }
 })
 
+function resolveDownloadUrl(raw = '') {
+  if (typeof raw !== 'string' || !raw) return ''
+  if (raw.includes('://')) return raw
+  try {
+    return decodeURIComponent(raw)
+  } catch {
+    return raw
+  }
+}
+
 router.get('/download', async (req, res) => {
   const { url, filename, inline } = req.query
 
@@ -64,7 +74,7 @@ router.get('/download', async (req, res) => {
   }
 
   try {
-    const decodedUrl = decodeURIComponent(url)
+    const decodedUrl = resolveDownloadUrl(url)
     const streamed = await tryStreamDownload(decodedUrl, res, { filename, inline })
     if (streamed) return
 

@@ -4,6 +4,7 @@ import { PptccExtractor } from './pptcc.js'
 import { TwitterExtractor } from './twitter.js'
 import { DouyinExtractor } from './douyin.js'
 import { XiaohongshuExtractor } from './xiaohongshu.js'
+import { InstagramExtractor } from './instagram.js'
 
 const extractors = {
   myppt: new MypptExtractor(),
@@ -12,6 +13,7 @@ const extractors = {
   twitter: new TwitterExtractor(),
   douyin: new DouyinExtractor(),
   xiaohongshu: new XiaohongshuExtractor(),
+  instagram: new InstagramExtractor(),
 }
 
 export function getExtractor(platformId) {
