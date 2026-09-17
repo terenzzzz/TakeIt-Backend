@@ -1,5 +1,6 @@
 import { Router } from 'express'
 import { detectPlatform, normalizeUrl } from '../services/detector.js'
+import { saveExtractRecord } from '../services/extractRecords.js'
 import { extractUrlFromText, isValidUrl, sanitizeShareText } from '../utils/url.js'
 import { getExtractor } from '../extractors/index.js'
 import { fetchStream, needsImpersonatedDownload, getRefererForUrl } from '../services/fetcher.js'
@@ -21,14 +22,34 @@ const ERROR_MESSAGES = {
 
 router.post('/extract', async (req, res) => {
   const { url, password } = req.body || {}
+  const originalInput = typeof url === 'string' ? url : ''
   const resolvedUrl = extractUrlFromText(url) || (typeof url === 'string' ? sanitizeShareText(url) : '')
+  const requestMeta = {
+    originalInput,
+    clientIp: req.ip || null,
+    userAgent: req.get('user-agent') || null,
+  }
 
   if (!resolvedUrl || !isValidUrl(resolvedUrl)) {
+    saveExtractRecord({
+      ...requestMeta,
+      resolvedUrl,
+      status: 'error',
+      errorCode: 'INVALID_URL',
+      errorMessage: ERROR_MESSAGES.INVALID_URL,
+    })
     return res.status(400).json({ error: 'INVALID_URL', message: ERROR_MESSAGES.INVALID_URL })
   }
 
   const platform = detectPlatform(resolvedUrl)
   if (!platform) {
+    saveExtractRecord({
+      ...requestMeta,
+      resolvedUrl,
+      status: 'error',
+      errorCode: 'UNSUPPORTED_PLATFORM',
+      errorMessage: ERROR_MESSAGES.UNSUPPORTED_PLATFORM,
+    })
     return res.status(400).json({
       error: 'UNSUPPORTED_PLATFORM',
       message: ERROR_MESSAGES.UNSUPPORTED_PLATFORM,
@@ -37,6 +58,14 @@ router.post('/extract', async (req, res) => {
 
   const extractor = getExtractor(platform.id)
   if (!extractor) {
+    saveExtractRecord({
+      ...requestMeta,
+      resolvedUrl,
+      platform: platform.id,
+      status: 'error',
+      errorCode: 'UNSUPPORTED_PLATFORM',
+      errorMessage: ERROR_MESSAGES.UNSUPPORTED_PLATFORM,
+    })
     return res.status(400).json({
       error: 'UNSUPPORTED_PLATFORM',
       message: ERROR_MESSAGES.UNSUPPORTED_PLATFORM,
@@ -45,13 +74,32 @@ router.post('/extract', async (req, res) => {
 
   try {
     const result = await extractor.extract(normalizeUrl(resolvedUrl), { password })
+    saveExtractRecord({
+      ...requestMeta,
+      resolvedUrl,
+      platform: result.platform || platform.id,
+      title: result.title || '',
+      status: result.needsPassword ? 'needs_password' : 'success',
+      needsPassword: Boolean(result.needsPassword),
+      mediaCount: Array.isArray(result.media) ? result.media.length : 0,
+      result,
+    })
     return res.json(result)
   } catch (err) {
     const code = normalizeErrorCode(err)
+    const message = err.message || ERROR_MESSAGES[code] || ERROR_MESSAGES.PARSE_FAILED
+    saveExtractRecord({
+      ...requestMeta,
+      resolvedUrl,
+      platform: platform.id,
+      status: 'error',
+      errorCode: code,
+      errorMessage: message,
+    })
     const status = code === 'PASSWORD_FAILED' ? 401 : code === 'EXPIRED' ? 410 : 422
     return res.status(status).json({
       error: code,
-      message: err.message || ERROR_MESSAGES[code] || ERROR_MESSAGES.PARSE_FAILED,
+      message,
     })
   }
 })

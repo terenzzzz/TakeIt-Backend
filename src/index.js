@@ -2,6 +2,7 @@ import 'dotenv/config'
 import express from 'express'
 import cors from 'cors'
 import rateLimit from 'express-rate-limit'
+import { checkDatabase, initDatabase } from './db/client.js'
 import extractRoutes from './routes/extract.js'
 
 const app = express()
@@ -19,8 +20,8 @@ const limiter = rateLimit({
 })
 app.use('/api/extract', limiter)
 
-app.get('/health', (_req, res) => {
-  res.json({ status: 'ok' })
+app.get('/health', async (_req, res) => {
+  res.json({ status: 'ok', database: await checkDatabase() })
 })
 
 app.use('/api', extractRoutes)
@@ -30,6 +31,17 @@ app.use((err, _req, res, _next) => {
   res.status(500).json({ error: 'INTERNAL_ERROR', message: '服务器内部错误' })
 })
 
-app.listen(PORT, () => {
-  console.log(`TakeIt API running on http://localhost:${PORT}`)
-})
+async function start() {
+  try {
+    const ready = await initDatabase()
+    if (ready) console.log('MongoDB connected')
+  } catch (err) {
+    console.error('MongoDB init failed:', err.message)
+  }
+
+  app.listen(PORT, () => {
+    console.log(`TakeIt API running on http://localhost:${PORT}`)
+  })
+}
+
+start()

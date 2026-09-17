@@ -5,6 +5,7 @@ const USER_AGENT =
 
 let session = null
 let SessionClass = null
+let sessionQueue = Promise.resolve()
 
 async function getSession() {
   if (!SessionClass) {
@@ -23,6 +24,7 @@ async function getSession() {
   if (!session) {
     session = new SessionClass({
       impersonate: 'chrome131',
+      timeout: 20,
       headers: {
         'User-Agent': USER_AGENT,
         'Accept-Language': 'zh-TW,zh;q=0.9,en;q=0.8',
@@ -30,6 +32,24 @@ async function getSession() {
     })
   }
   return session
+}
+
+function resetSession() {
+  session = null
+}
+
+async function withSession(fn) {
+  const run = sessionQueue.then(fn, fn)
+  sessionQueue = run.then(
+    () => {},
+    () => {},
+  )
+  try {
+    return await run
+  } catch (err) {
+    resetSession()
+    throw err
+  }
 }
 
 export function isCloudflareBlocked(html, status) {
@@ -75,53 +95,60 @@ function decodeBody(response) {
 }
 
 export async function getImpersonatedCookies() {
-  const client = await getSession()
-  const jar = {}
-  for (const line of client.cookies || []) {
-    if (!line || line.startsWith('#')) continue
-    const parts = line.split('\t')
-    if (parts.length >= 7) jar[parts[5]] = parts[6]
-  }
-  return jar
+  return withSession(async () => {
+    const client = await getSession()
+    const jar = {}
+    for (const line of client.cookies || []) {
+      if (!line || line.startsWith('#')) continue
+      const parts = line.split('\t')
+      if (parts.length >= 7) jar[parts[5]] = parts[6]
+    }
+    return jar
+  })
 }
 
 export async function fetchHtmlImpersonated(url, options = {}) {
-  const client = await getSession()
-  const response = await client.get(url, {
-    headers: options.headers,
-    timeout: options.timeout || 20,
-  })
-  const html = decodeBody(response)
+  return withSession(async () => {
+    const client = await getSession()
+    const response = await client.get(url, {
+      headers: options.headers,
+      timeout: options.timeout || 20,
+    })
+    const html = decodeBody(response)
 
-  return {
-    html,
-    finalUrl: response.url || url,
-    status: response.status,
-  }
+    return {
+      html,
+      finalUrl: response.url || url,
+      status: response.status,
+    }
+  })
 }
 
 export async function postFormImpersonated(url, data, options = {}) {
-  const client = await getSession()
-  const body =
-    data instanceof URLSearchParams ? data.toString() : new URLSearchParams(data).toString()
+  return withSession(async () => {
+    const client = await getSession()
+    const body =
+      data instanceof URLSearchParams ? data.toString() : new URLSearchParams(data).toString()
 
-  const response = await client.post(url, {
-    headers: {
-      'Content-Type': 'application/x-www-form-urlencoded',
-      ...options.headers,
-    },
-    data: body,
-    timeout: options.timeout || 20,
+    const response = await client.post(url, {
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        ...options.headers,
+      },
+      data: body,
+      timeout: options.timeout || 20,
+    })
+
+    return {
+      html: decodeBody(response),
+      finalUrl: response.url || url,
+      status: response.status,
+    }
   })
-
-  return {
-    html: decodeBody(response),
-    finalUrl: response.url || url,
-    status: response.status,
-  }
 }
 
 export async function fetchBinaryImpersonated(url, options = {}) {
+  return withSession(async () => {
   const client = await getSession()
   const response = await client.get(url, {
     headers: {
@@ -129,7 +156,7 @@ export async function fetchBinaryImpersonated(url, options = {}) {
       Referer: options.referer,
       ...options.headers,
     },
-    timeout: options.timeout || 300,
+    timeout: options.timeout || 60,
   })
 
   if (!response.ok) {
@@ -153,4 +180,5 @@ export async function fetchBinaryImpersonated(url, options = {}) {
     },
     status: response.status,
   }
+  })
 }

@@ -1,5 +1,6 @@
 import { BaseExtractor } from './base.js'
 import { fetchJson } from '../services/fetcher.js'
+import { jsonSafeText } from '../utils/text.js'
 import { normalizeUrl } from '../utils/url.js'
 
 const TWEET_ID_RE = /\/(?:status|statuses)\/(\d+)/i
@@ -85,7 +86,7 @@ export class TwitterExtractor extends BaseExtractor {
 
     const tweet = data.tweet || data.status || data
     const title = tweet.author?.name
-      ? `@${tweet.author.screen_name} - ${tweet.text?.slice(0, 50) || 'Tweet'}`
+      ? `@${tweet.author.screen_name} - ${jsonSafeText(tweet.text, 50) || 'Tweet'}`
       : 'Twitter Media'
 
     const media = []

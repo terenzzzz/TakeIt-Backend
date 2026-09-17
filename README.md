@@ -9,6 +9,7 @@
 - **curl-cffi-node** — 浏览器指纹模拟，绕过 MyPPT / LURL 的 Cloudflare 防护
 - **Playwright Core + Chromium + Xvfb** — 抖音 Web API 被 Argus 拦截时的浏览器解析兜底
 - **cheerio** — HTML 解析与媒体 URL 提取
+- **MongoDB** — 解析记录持久化
 - **express-rate-limit** — API 速率限制
 - **cors** — 跨域配置
 
@@ -31,14 +32,40 @@ npm start      # 生产模式
 | `PORT` | 服务端口 | `3001` |
 | `CORS_ORIGIN` | 允许的前端域名 | `http://localhost:5173` |
 | `CHROMIUM_EXECUTABLE_PATH` | Chromium 可执行文件路径；Playwright 无法自动定位时填写 | 空 |
+| `MONGODB_URI` | MongoDB 连接串，用于保存解析记录；留空则跳过落库 | 空 |
 
 抖音浏览器兜底在 Linux 服务器上还需要 `Xvfb`。程序会按需启动虚拟显示并复用一个 Chromium 实例。
+
+本地或新 clone 的项目**可以不配 MongoDB**。未设置 `MONGODB_URI` 时服务照常启动，解析与下载不受影响，只是不落库。`.env.example` 里的连接串是占位符，请改成真实地址后再启用。
+
+## 解析记录（MongoDB）
+
+配置 `MONGODB_URI` 后，每次 `POST /api/extract` 会把结果异步写入 `takeit.extract_records`。写入失败不会阻断接口响应，也不会把页面密码存进数据库。
+
+文档主要字段：
+
+| 字段 | 说明 |
+|------|------|
+| `originalInput` | 请求原文（分享链接或整段分享文案） |
+| `resolvedUrl` | 从文案中提取并规范化后的 URL |
+| `platform` | 平台标识 |
+| `title` | 解析标题 |
+| `status` | `success` / `needs_password` / `error` |
+| `errorCode` / `errorMessage` | 失败时的错误码与说明 |
+| `needsPassword` | 是否仍需密码 |
+| `mediaCount` | 媒体数量 |
+| `result` | 返回给客户端的完整解析结果（可展开 `media`） |
+| `clientIp` / `userAgent` | 请求来源 |
+| `createdAt` | 写入时间 |
+
+用 [MongoDB Compass](https://www.mongodb.com/products/tools/compass) 连接后，打开 `takeit` → `extract_records` 即可按文档查看。
 
 ## 项目结构
 
 ```
 src/
 ├── index.js              # 入口：Express 应用、CORS、速率限制
+├── db/                   # MongoDB 连接与索引
 ├── routes/extract.js     # /api/extract、/api/download 路由
 ├── extractors/           # 各平台解析器
 │   ├── myppt-lurl.js     # MyPPT / LURL 共用逻辑（密码解锁、媒体提取）
@@ -49,6 +76,7 @@ src/
 │   └── instagram.js      # Instagram 解析
 ├── services/
 │   ├── detector.js       # 平台识别
+│   ├── extractRecords.js # 解析记录异步写入 MongoDB
 │   ├── fetcher.js        # axios 请求封装
 │   ├── impersonatedHttp.js  # curl-cffi 浏览器模拟请求
 │   ├── douyinBrowser.js  # Chromium 浏览器解析兜底与实例复用
@@ -57,6 +85,7 @@ src/
     ├── douyin.js         # 抖音短链解析、ttwid 会话、Web API 提取
     ├── xiaohongshu.js    # 小红书短链解析、INITIAL_STATE 提取
     ├── instagram.js      # Instagram shortcode、embed contextJSON 提取
+    ├── text.js           # JSON 安全文本截断（避免切断 emoji）
     └── ...               # URL、文件名、密码等工具函数
 ```
 
@@ -67,8 +96,12 @@ src/
 健康检查。
 
 ```json
-{ "status": "ok" }
+{ "status": "ok", "database": "ok" }
 ```
+
+`database` 可能为 `ok`、`disabled`（未配置 `MONGODB_URI`）或 `error`。
+
+解析成功、需要密码或失败时，后端会把记录异步写入 `extract_records` 集合（不含密码）。数据库异常不会阻断解析接口。
 
 ### POST /api/extract
 
@@ -199,6 +232,16 @@ GET /api/download?url=<encoded_url>&filename=<name>&inline=<0|1>
 - 从 HTML 元素（`video`、`audio`、`img`、`preload` 链接）提取
 - 从页面源码中正则匹配嵌入的媒体 URL（含 r2limit CDN）
 - 自动去重，并根据 URL 路径或 Content-Type 生成文件名
+
+### Twitter / X 标题
+
+标题按完整 Unicode 字符截断，避免把 emoji 从中间切开后生成非法 JSON，导致 iOS 客户端解码失败。
+
+### 解析记录写入
+
+1. 识别平台并完成解析后，将结果异步 `insertOne` 到 `extract_records`
+2. 使用独立文档副本写入，避免驱动序列化影响接口响应体
+3. curl-cffi 会话串行复用，超时后重建，降低并发卡死概率
 
 ### 速率限制
 

@@ -28,9 +28,12 @@ Content-Type：`application/json`（除下载接口返回二进制流）
 
 ```json
 {
-  "status": "ok"
+  "status": "ok",
+  "database": "ok"
 }
 ```
+
+`database` 为 `ok`、`disabled`（未配置 `MONGODB_URI`）或 `error`。解析请求会异步写入 MongoDB `extract_records`，不影响接口响应，也不会把页面密码入库。
 
 ---
 

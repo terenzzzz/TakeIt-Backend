@@ -1,4 +1,5 @@
 import { buildMediaFilename } from '../utils/filename.js'
+import { jsonSafeText } from '../utils/text.js'
 
 export class BaseExtractor {
   constructor(platform) {
@@ -12,7 +13,7 @@ export class BaseExtractor {
   buildResult({ title = '', needsPassword = false, media = [], passwordRequired = false }) {
     return {
       platform: this.platform,
-      title,
+      title: jsonSafeText(title),
       needsPassword: needsPassword || passwordRequired,
       media: media.map((item, index) => ({
         type: item.type,
