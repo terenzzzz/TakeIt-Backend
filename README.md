@@ -7,6 +7,7 @@
 - **Node.js** + **Express** — HTTP 服务
 - **axios** — 常规 HTTP 请求（PPT.cc、Twitter、抖音、下载代理）
 - **curl-cffi-node** — 浏览器指纹模拟，绕过 MyPPT / LURL 的 Cloudflare 防护
+- **Playwright Core + Chromium + Xvfb** — 抖音 Web API 被 Argus 拦截时的浏览器解析兜底
 - **cheerio** — HTML 解析与媒体 URL 提取
 - **express-rate-limit** — API 速率限制
 - **cors** — 跨域配置
@@ -16,6 +17,7 @@
 ```bash
 npm install
 cp .env.example .env
+npx playwright-core install chromium  # 安装抖音浏览器兜底所需 Chromium
 npm run dev    # 开发模式（文件变更自动重启）
 npm start      # 生产模式
 ```
@@ -28,6 +30,9 @@ npm start      # 生产模式
 |------|------|--------|
 | `PORT` | 服务端口 | `3001` |
 | `CORS_ORIGIN` | 允许的前端域名 | `http://localhost:5173` |
+| `CHROMIUM_EXECUTABLE_PATH` | Chromium 可执行文件路径；Playwright 无法自动定位时填写 | 空 |
+
+抖音浏览器兜底在 Linux 服务器上还需要 `Xvfb`。程序会按需启动虚拟显示并复用一个 Chromium 实例。
 
 ## 项目结构
 
@@ -46,6 +51,7 @@ src/
 │   ├── detector.js       # 平台识别
 │   ├── fetcher.js        # axios 请求封装
 │   ├── impersonatedHttp.js  # curl-cffi 浏览器模拟请求
+│   ├── douyinBrowser.js  # Chromium 浏览器解析兜底与实例复用
 │   └── shortlinkHttp.js  # 短链页面抓取与密码解锁
 └── utils/
     ├── douyin.js         # 抖音短链解析、ttwid 会话、Web API 提取
@@ -94,7 +100,16 @@ src/
       "type": "video",
       "url": "https://...",
       "thumbnail": "https://...",
-      "filename": "media-1.mp4"
+      "filename": "media-1.mp4",
+      "qualities": [
+        {
+          "label": "1080p",
+          "url": "https://...",
+          "width": 1920,
+          "height": 1080,
+          "bitrate": 1609149
+        }
+      ]
     }
   ]
 }
@@ -105,6 +120,7 @@ src/
 | `platform` | 平台标识：`myppt` / `lurl` / `pptcc` / `twitter` / `douyin` / `xiaohongshu` / `instagram` |
 | `needsPassword` | 页面需要密码且尚未解锁时为 `true`，此时 `media` 为空 |
 | `media[].type` | 媒体类型：`image` / `video` / `audio` |
+| `media[].qualities` | 视频可用清晰度列表，按质量从高到低排列；平台仅返回单一源时可能省略 |
 
 **错误响应**
 
@@ -137,13 +153,13 @@ GET /api/download?url=<encoded_url>&filename=<name>&inline=<0|1>
 
 | 平台 | 域名 | 媒体类型 | 特性 |
 |------|------|----------|------|
-| MyPPT | myppt.cc | 图片、视频 | curl-cffi 绕过 Cloudflare；密码页解锁；日期密码自动尝试 |
-| LURL | lurl.cc | 图片、视频 | 同 MyPPT |
+| Twitter/X | twitter.com, x.com, mobile.twitter.com | 图片、视频 | 通过 [fxtwitter](https://api.fxtwitter.com) API 解析；支持多码率 MP4 |
+| Instagram | instagram.com, instagr.am | 图片、视频 | 解析公开 Embed 与 Polaris GraphQL；支持图集及多清晰度 |
+| 抖音 | douyin.com, v.douyin.com, iesdouyin.com | 图片、视频 | Web Detail API + Chromium 兜底；支持分享文案、图集及多清晰度 |
+| 小红书 | xiaohongshu.com, xhslink.com, xhslink.cn, rednote.com | 图片、视频 | 短链跳转、页面状态提取及多清晰度 |
+| MyPPT.cc | myppt.cc | 图片、视频 | curl-cffi 绕过 Cloudflare；密码页解锁；日期密码自动尝试 |
+| LURL.cc | lurl.cc | 图片、视频 | 同 MyPPT.cc |
 | PPT.cc | ppt.cc | 图片、视频 | HTML 解析，从 `<video>` / `<img>` / 脚本中提取 |
-| Twitter/X | twitter.com, x.com, mobile.twitter.com | 图片、视频 | 通过 [fxtwitter](https://api.fxtwitter.com) API 解析，自动选取最高码率 MP4 |
-| 抖音 | douyin.com, v.douyin.com, iesdouyin.com | 图片、视频 | 短链跳转提取作品 ID；ttwid 注册 + Web Detail API；支持整段分享文案 |
-| 小红书 | xiaohongshu.com, xhslink.com, xhslink.cn, rednote.com | 图片、视频 | 短链跳转；解析页面 `INITIAL_STATE`；支持整段分享文案 |
-| Instagram | instagram.com, instagr.am | 图片、视频 | 从 Reel / 帖子 / TV 链接提取 shortcode；解析 embed 页 `contextJSON`；支持图集 |
 
 ## 核心机制
 
@@ -159,8 +175,10 @@ GET /api/download?url=<encoded_url>&filename=<name>&inline=<0|1>
 1. 从输入中提取抖音链接（支持 `v.douyin.com` 短链及整段分享文案）
 2. 跟随短链跳转，解析作品 `aweme_id`
 3. 注册 `ttwid` 并访问 `douyin.com/video/{id}` 建立会话
-4. 调用 Douyin Web Detail API 获取标题、封面与播放地址
-5. 视频优先使用无水印 `aweme.snssdk.com` 播放接口；图集返回原图列表
+4. 优先调用 Douyin Web Detail API 获取标题、封面与播放地址
+5. 遇到 `Uifid Not Found`、`Sign Invalid` 等 Argus 拦截时，自动使用有界面 Chromium + Xvfb 执行官方安全脚本并拦截详情响应
+6. 浏览器上下文复用且请求串行，降低启动开销与风控概率
+7. 视频清晰度按分辨率去重；图集返回原图及实况视频
 
 ### 小红书解析
 
@@ -172,8 +190,9 @@ GET /api/download?url=<encoded_url>&filename=<name>&inline=<0|1>
 ### Instagram 解析
 
 1. 从输入中提取 Instagram 链接（支持 `/reel/`、`/p/`、`/tv/` 及带 `stkn` 的分享链接）
-2. 访问公开 embed 页，解析 `contextJSON` 中的 `shortcode_media`
-3. 视频使用 `video_url`；图片使用 `display_resources` 中的最高分辨率；图集遍历 sidecar 子项
+2. 优先访问公开 Embed 页并解析 `contextJSON`
+3. Embed 未返回媒体时，使用匿名 Polaris GraphQL 查询
+4. 视频返回可用 `video_versions` 清晰度；图片选择最高分辨率；图集遍历子项
 
 ### 媒体提取
 
@@ -183,7 +202,7 @@ GET /api/download?url=<encoded_url>&filename=<name>&inline=<0|1>
 
 ### 速率限制
 
-所有 `/api/*` 路由共享限制：**每分钟最多 30 次请求**。
+`POST /api/extract` 限制为：**每分钟最多 30 次请求**。
 
 ## 免责声明
 

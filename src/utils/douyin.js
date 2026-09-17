@@ -238,7 +238,8 @@ export async function resolveDouyinAwemeId(input) {
 }
 
 function describeDouyinFilter(filter = {}) {
-  const code = String(filter.filter_reason || '')
+  const code = String(filter.filter_reason || filter.reason || '')
+  if (code === '8') return '抖音触发了访问限制，请稍后重试'
   if (code === 'status_friend_see') return '该抖音作品仅好友可见，无法解析'
   if (/self_see|author_see|private|only_user/i.test(code)) return '该抖音作品为私密内容，无法解析'
   return filter.detail_msg || filter.notice || filter.filter_reason || '该抖音作品无法访问'
@@ -248,7 +249,7 @@ function throwIfFiltered(payload, awemeId) {
   const filter = payload.filter_detail || payload.filter_list?.[0] || null
   if (filter) {
     const err = new Error(describeDouyinFilter(filter))
-    err.code = 'EXPIRED'
+    err.code = String(filter.filter_reason || filter.reason || '') === '8' ? 'BLOCKED' : 'EXPIRED'
     throw err
   }
 
@@ -292,6 +293,7 @@ function parseDetailResponse(raw, awemeId) {
     if (trimmed.includes('ArgusSecurityPlugin') || trimmed.startsWith('Blocked by Argus')) {
       const err = new Error('抖音触发了访问限制，请稍后重试')
       err.code = 'BLOCKED'
+      err.browserRequired = true
       throw err
     }
     try {
@@ -326,6 +328,7 @@ async function fetchDouyinDetailItem(awemeId) {
       if (err.code === 'EXPIRED' || err.code === 'NO_MEDIA') throw err
       if (err.code === 'BLOCKED') {
         invalidateTtwidCache()
+        if (err.browserRequired) throw err
         lastError = err
         continue
       }
@@ -360,11 +363,14 @@ async function fetchDouyinSlidesItem(awemeId) {
 
 export async function fetchDouyinShareItem(awemeId, kind = '') {
   const preferSlides = SLIDES_KINDS.has(kind)
+  let primaryError = null
+
   if (preferSlides) {
     try {
       return await fetchDouyinSlidesItem(awemeId)
     } catch (err) {
       if (err.code === 'EXPIRED' || err.code === 'NO_MEDIA') throw err
+      primaryError = err
     }
   }
 
@@ -372,15 +378,19 @@ export async function fetchDouyinShareItem(awemeId, kind = '') {
     return await fetchDouyinDetailItem(awemeId)
   } catch (err) {
     if (err.code === 'EXPIRED' || err.code === 'NO_MEDIA') throw err
-    if (!preferSlides) {
-      try {
-        return await fetchDouyinSlidesItem(awemeId)
-      } catch (slidesErr) {
-        if (slidesErr.code === 'EXPIRED' || slidesErr.code === 'NO_MEDIA') throw slidesErr
-      }
-    }
-    throw err
+    primaryError = err
   }
+
+  try {
+    const { fetchDouyinItemInBrowser } = await import('../services/douyinBrowser.js')
+    const item = await fetchDouyinItemInBrowser(awemeId)
+    if (item) return item
+  } catch (browserError) {
+    if (primaryError?.code !== 'BLOCKED') throw primaryError || browserError
+    throw browserError
+  }
+
+  throw primaryError || Object.assign(new Error('抖音浏览器未找到作品数据'), { code: 'NO_MEDIA' })
 }
 
 function buildPlayUrl(videoId, ratio = '1080p') {
@@ -436,9 +446,18 @@ function collectVideoQualities(item) {
   const direct = video?.play_addr?.url_list?.[0]
   add(direct, { width: video.width, height: video.height })
 
-  return qualities.sort(
+  const sorted = qualities.sort(
     (a, b) => (b.height || 0) - (a.height || 0) || (b.bitrate || 0) - (a.bitrate || 0)
   )
+  const seenResolutions = new Set()
+  return sorted.filter((quality) => {
+    const key = quality.width && quality.height
+      ? `${quality.width}x${quality.height}`
+      : quality.label || quality.url
+    if (seenResolutions.has(key)) return false
+    seenResolutions.add(key)
+    return true
+  })
 }
 
 function isWatermarkedImageUrl(url = '') {
