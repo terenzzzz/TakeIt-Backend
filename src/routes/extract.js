@@ -51,7 +51,7 @@ router.post('/extract', async (req, res) => {
     const status = code === 'PASSWORD_FAILED' ? 401 : code === 'EXPIRED' ? 410 : 422
     return res.status(status).json({
       error: code,
-      message: ERROR_MESSAGES[code] || err.message || ERROR_MESSAGES.PARSE_FAILED,
+      message: err.message || ERROR_MESSAGES[code] || ERROR_MESSAGES.PARSE_FAILED,
     })
   }
 })
@@ -75,7 +75,7 @@ router.get('/download', async (req, res) => {
 
   try {
     const decodedUrl = resolveDownloadUrl(url)
-    const streamed = await tryStreamDownload(decodedUrl, res, { filename, inline })
+    const streamed = await tryStreamDownload(decodedUrl, req, res, { filename, inline })
     if (streamed) return
 
     if (needsImpersonatedDownload(decodedUrl)) {
@@ -123,18 +123,25 @@ function buildSafeFilename(decodedUrl, filename, contentType) {
   return ensureFilenameExtension(sanitizeFilename(filename) || fallbackName, contentType)
 }
 
-function setDownloadHeaders(res, { contentType, contentLength, safeName, inline }) {
+function setDownloadHeaders(res, { contentType, contentLength, contentRange, safeName, inline, status = 200 }) {
   const disposition = inline === '1' ? 'inline' : 'attachment'
+  res.status(status)
   res.setHeader('Content-Disposition', `${disposition}; filename="${encodeURIComponent(safeName)}"`)
   res.setHeader('X-Accel-Buffering', 'no')
+  res.setHeader('Cache-Control', 'private, max-age=300')
+  res.setHeader('Accept-Ranges', 'bytes')
   if (contentType) res.setHeader('Content-Type', contentType)
   if (contentLength) res.setHeader('Content-Length', contentLength)
+  if (contentRange) res.setHeader('Content-Range', contentRange)
 }
 
-async function tryStreamDownload(decodedUrl, res, { filename, inline }) {
+async function tryStreamDownload(decodedUrl, req, res, { filename, inline }) {
+  const range = req.headers.range
   let response
   try {
-    response = await fetchStream(decodedUrl)
+    response = await fetchStream(decodedUrl, {
+      headers: range ? { Range: range } : {},
+    })
   } catch {
     return false
   }
@@ -150,20 +157,33 @@ async function tryStreamDownload(decodedUrl, res, { filename, inline }) {
     return false
   }
 
+  const abortUpstream = () => {
+    if (!res.writableEnded) response.data?.destroy?.()
+  }
+  req.on('close', abortUpstream)
+  req.on('aborted', abortUpstream)
+
   const safeName = buildSafeFilename(decodedUrl, filename, contentType)
   setDownloadHeaders(res, {
+    status: response.status,
     contentType,
     contentLength: response.headers['content-length'],
+    contentRange: response.headers['content-range'],
     safeName,
     inline,
   })
 
-  await new Promise((resolve, reject) => {
-    response.data.on('error', reject)
-    res.on('error', reject)
-    response.data.on('end', resolve)
-    response.data.pipe(res)
-  })
+  try {
+    await new Promise((resolve, reject) => {
+      response.data.on('error', reject)
+      res.on('error', reject)
+      response.data.on('end', resolve)
+      response.data.pipe(res)
+    })
+  } finally {
+    req.off('close', abortUpstream)
+    req.off('aborted', abortUpstream)
+  }
 
   return true
 }

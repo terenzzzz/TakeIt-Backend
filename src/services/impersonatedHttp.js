@@ -1,4 +1,4 @@
-import { brotliDecompressSync, gunzipSync, inflateSync } from 'zlib'
+import zlib, { brotliDecompressSync, gunzipSync, inflateSync } from 'zlib'
 
 const USER_AGENT =
   'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
@@ -43,6 +43,19 @@ export function isCloudflareBlocked(html, status) {
   )
 }
 
+const ZSTD_MAGIC = Buffer.from([0x28, 0xb5, 0x2f, 0xfd])
+
+function looksLikeZstd(buffer) {
+  return buffer?.length >= 4 && buffer.subarray(0, 4).equals(ZSTD_MAGIC)
+}
+
+function decompressZstd(buffer) {
+  if (typeof zlib.zstdDecompressSync !== 'function') {
+    throw new Error('zstd is not supported by this Node.js runtime')
+  }
+  return zlib.zstdDecompressSync(buffer).toString('utf8')
+}
+
 function decodeBody(response) {
   const encoding = response.headers.get('content-encoding')?.toLowerCase()
   const buffer = response.content
@@ -51,11 +64,25 @@ function decodeBody(response) {
     if (encoding === 'br') return brotliDecompressSync(buffer).toString('utf8')
     if (encoding === 'gzip') return gunzipSync(buffer).toString('utf8')
     if (encoding === 'deflate') return inflateSync(buffer).toString('utf8')
+    if (encoding === 'zstd' || encoding === 'zst' || looksLikeZstd(buffer)) {
+      return decompressZstd(buffer)
+    }
   } catch {
     // fall through to plain text
   }
 
   return response.text()
+}
+
+export async function getImpersonatedCookies() {
+  const client = await getSession()
+  const jar = {}
+  for (const line of client.cookies || []) {
+    if (!line || line.startsWith('#')) continue
+    const parts = line.split('\t')
+    if (parts.length >= 7) jar[parts[5]] = parts[6]
+  }
+  return jar
 }
 
 export async function fetchHtmlImpersonated(url, options = {}) {

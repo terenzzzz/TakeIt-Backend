@@ -17,7 +17,7 @@ const limiter = rateLimit({
   max: 30,
   message: { error: 'RATE_LIMIT', message: '请求过于频繁，请稍后重试' },
 })
-app.use('/api', limiter)
+app.use('/api/extract', limiter)
 
 app.get('/health', (_req, res) => {
   res.json({ status: 'ok' })

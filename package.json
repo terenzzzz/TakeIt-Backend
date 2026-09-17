@@ -15,6 +15,7 @@
     "curl-cffi-node": "^0.1.8",
     "dotenv": "^16.4.7",
     "express": "^4.21.2",
-    "express-rate-limit": "^7.5.0"
+    "express-rate-limit": "^7.5.0",
+    "playwright-core": "^1.63.0"
   }
 }

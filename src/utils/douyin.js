@@ -10,11 +10,13 @@ const DESKTOP_UA =
 const DOUYIN_URL_RE =
   /https?:\/\/(?:[A-Za-z0-9-]+\.)*(?:douyin|iesdouyin)\.com\/[A-Za-z0-9_.?=&%/-]*[A-Za-z0-9_/-]/i
 
-const PATH_ID_RE = /\/(?:video|note|slides)\/(\d+)/
+const PATH_META_RE = /\/(video|note|slides)\/(\d+)/
 const DETAIL_API =
   'https://www.douyin.com/aweme/v1/web/aweme/detail/?device_platform=webapp&aid=6383&channel=channel_pc_web'
+const SLIDES_API = 'https://www.iesdouyin.com/web/api/v2/aweme/slidesinfo/'
 const TTWID_REGISTER_URL = 'https://ttwid.bytedance.com/ttwid/union/register/'
 const PHOTO_AWEME_TYPES = new Set([2, 68])
+const SLIDES_KINDS = new Set(['note', 'slides'])
 const ALLOWED_HOSTS = ['douyin.com', 'iesdouyin.com']
 const TTWID_TTL_MS = 60 * 60 * 1000
 
@@ -155,17 +157,30 @@ function isDouyinHost(hostname = '') {
   return ALLOWED_HOSTS.some((allowed) => host === allowed || host.endsWith(`.${allowed}`))
 }
 
-function extractPostId(url = '') {
+function randomWebId() {
+  return `75${Math.floor(Math.random() * 1e15)
+    .toString()
+    .padStart(15, '0')}`
+}
+
+function extractPostMeta(url = '') {
   try {
     const parsed = new URL(url.includes('://') ? url : `https://${url}`)
     const modalIds = new URLSearchParams(parsed.search).getAll('modal_id')
-    if (modalIds[0] && /^\d+$/.test(modalIds[0])) return modalIds[0]
+    if (modalIds[0] && /^\d+$/.test(modalIds[0])) {
+      return { awemeId: modalIds[0], kind: '' }
+    }
 
-    const match = parsed.pathname.match(PATH_ID_RE)
-    return match?.[1] || ''
+    const match = parsed.pathname.match(PATH_META_RE)
+    if (match) return { awemeId: match[2], kind: match[1] }
+    return { awemeId: '', kind: '' }
   } catch {
-    return ''
+    return { awemeId: '', kind: '' }
   }
+}
+
+function slidesPageUrl(awemeId) {
+  return `https://www.iesdouyin.com/share/slides/${awemeId}/`
 }
 
 async function redirectTarget(url) {
@@ -180,7 +195,7 @@ async function redirectTarget(url) {
   return new URL(location, url).href
 }
 
-export async function resolveDouyinAwemeId(input) {
+async function resolveDouyinShareTarget(input) {
   let current = extractDouyinUrl(input)
   if (!current.includes('://')) current = `https://${current}`
 
@@ -198,8 +213,8 @@ export async function resolveDouyinAwemeId(input) {
       throw err
     }
 
-    const awemeId = extractPostId(current)
-    if (awemeId) return awemeId
+    const meta = extractPostMeta(current)
+    if (meta.awemeId) return meta
 
     if (hostname.startsWith('live.')) {
       const err = new Error('暂不支持抖音直播链接')
@@ -217,23 +232,39 @@ export async function resolveDouyinAwemeId(input) {
   throw err
 }
 
-function itemFromDetailPayload(payload, awemeId) {
-  if (!payload || typeof payload !== 'object') return null
+export async function resolveDouyinAwemeId(input) {
+  const { awemeId } = await resolveDouyinShareTarget(input)
+  return awemeId
+}
+
+function describeDouyinFilter(filter = {}) {
+  const code = String(filter.filter_reason || '')
+  if (code === 'status_friend_see') return '该抖音作品仅好友可见，无法解析'
+  if (/self_see|author_see|private|only_user/i.test(code)) return '该抖音作品为私密内容，无法解析'
+  return filter.detail_msg || filter.notice || filter.filter_reason || '该抖音作品无法访问'
+}
+
+function throwIfFiltered(payload, awemeId) {
+  const filter = payload.filter_detail || payload.filter_list?.[0] || null
+  if (filter) {
+    const err = new Error(describeDouyinFilter(filter))
+    err.code = 'EXPIRED'
+    throw err
+  }
 
   if (payload.status_code && payload.status_code !== 0) {
-    const filterList = payload.filter_list || []
-    if (filterList.length > 0) {
-      const entry = filterList[0]
-      const reason = entry.detail_msg || entry.notice || entry.filter_reason || '作品不可用'
-      const err = new Error(`抖音作品无法访问：${reason}`)
-      err.code = 'EXPIRED'
-      throw err
-    }
-
     const err = new Error(payload.status_msg || '抖音接口暂时无法返回作品数据')
     err.code = 'PARSE_FAILED'
     throw err
   }
+
+  const err = new Error(`未找到抖音作品 ${awemeId}，可能已删除或设为私密`)
+  err.code = 'NO_MEDIA'
+  throw err
+}
+
+function itemFromDetailPayload(payload, awemeId) {
+  if (!payload || typeof payload !== 'object') return null
 
   if (payload.aweme_detail && typeof payload.aweme_detail === 'object') {
     return payload.aweme_detail
@@ -243,9 +274,11 @@ function itemFromDetailPayload(payload, awemeId) {
     return payload.item_list[0]
   }
 
-  const err = new Error(`未找到抖音作品 ${awemeId}，可能已删除或设为私密`)
-  err.code = 'NO_MEDIA'
-  throw err
+  if (payload.aweme_details?.length) {
+    return payload.aweme_details[0]
+  }
+
+  throwIfFiltered(payload, awemeId)
 }
 
 function parseDetailResponse(raw, awemeId) {
@@ -305,31 +338,107 @@ async function fetchDouyinDetailItem(awemeId) {
   throw err
 }
 
-export async function fetchDouyinShareItem(awemeId) {
-  return fetchDouyinDetailItem(awemeId)
+async function fetchDouyinSlidesItem(awemeId) {
+  const webId = randomWebId()
+  const params = new URLSearchParams({
+    reflow_source: 'reflow_page',
+    web_id: webId,
+    device_id: webId,
+    aweme_ids: `[${awemeId}]`,
+    request_source: '200',
+  })
+  const response = await shareClient.get(`${SLIDES_API}?${params.toString()}`, {
+    headers: {
+      ...mobileHeaders(slidesPageUrl(awemeId)),
+      Accept: 'application/json, text/plain, */*',
+    },
+    transformResponse: [(data) => data],
+  })
+
+  return parseDetailResponse(response.data, awemeId)
+}
+
+export async function fetchDouyinShareItem(awemeId, kind = '') {
+  const preferSlides = SLIDES_KINDS.has(kind)
+  if (preferSlides) {
+    try {
+      return await fetchDouyinSlidesItem(awemeId)
+    } catch (err) {
+      if (err.code === 'EXPIRED' || err.code === 'NO_MEDIA') throw err
+    }
+  }
+
+  try {
+    return await fetchDouyinDetailItem(awemeId)
+  } catch (err) {
+    if (err.code === 'EXPIRED' || err.code === 'NO_MEDIA') throw err
+    if (!preferSlides) {
+      try {
+        return await fetchDouyinSlidesItem(awemeId)
+      } catch (slidesErr) {
+        if (slidesErr.code === 'EXPIRED' || slidesErr.code === 'NO_MEDIA') throw slidesErr
+      }
+    }
+    throw err
+  }
 }
 
 function buildPlayUrl(videoId, ratio = '1080p') {
   return `https://aweme.snssdk.com/aweme/v1/play/?video_id=${encodeURIComponent(videoId)}&ratio=${ratio}&line=0`
 }
 
-function pickVideoUrl(item) {
-  const video = item?.video || {}
-  const uri = video?.play_addr?.uri
-  if (uri) return buildPlayUrl(uri)
+function pickLivePhotoUrl(image = {}) {
+  const url = image?.video?.play_addr?.url_list?.[0]
+  if (!url) return ''
+  return url.replace(/playwm/g, 'play')
+}
 
-  const bitRates = [...(video.bit_rate || [])].sort(
-    (a, b) => (b.bit_rate || 0) - (a.bit_rate || 0)
-  )
+function collectVideoQualities(item) {
+  const video = item?.video || {}
+  const qualities = []
+  const seen = new Set()
+  const add = (url, metadata = {}) => {
+    if (!url || seen.has(url) || /\.mp3(\?|$)/i.test(url)) return
+    const cleanUrl = url.replace(/playwm/g, 'play')
+    if (seen.has(cleanUrl)) return
+    seen.add(cleanUrl)
+    qualities.push({
+      url: cleanUrl,
+      width: metadata.width || video.width,
+      height: metadata.height || video.height,
+      bitrate: metadata.bitrate,
+      label: metadata.label || (metadata.height ? `${metadata.height}p` : ''),
+    })
+  }
+
+  const uri = video?.play_addr?.uri
+  if (uri && !/^https?:\/\//i.test(uri) && !/\.mp3(\?|$)/i.test(uri)) {
+    add(buildPlayUrl(uri), {
+      width: video.width,
+      height: video.height,
+      label: video.height ? `${video.height}p` : '原画',
+    })
+  }
+
+  const bitRates = [...(video.bit_rate || [])]
   for (const entry of bitRates) {
     const url = entry?.play_addr?.url_list?.[0]
-    if (url) return url.replace(/playwm/g, 'play')
+    add(url, {
+      width: entry.play_addr?.width || entry.width,
+      height: entry.play_addr?.height || entry.height,
+      bitrate: entry.bit_rate,
+      label: entry.play_addr?.height || entry.height
+        ? `${entry.play_addr?.height || entry.height}p`
+        : entry.gear_name || entry.quality_type || '',
+    })
   }
 
   const direct = video?.play_addr?.url_list?.[0]
-  if (direct) return direct.replace(/playwm/g, 'play')
+  add(direct, { width: video.width, height: video.height })
 
-  return null
+  return qualities.sort(
+    (a, b) => (b.height || 0) - (a.height || 0) || (b.bitrate || 0) - (a.bitrate || 0)
+  )
 }
 
 function isWatermarkedImageUrl(url = '') {
@@ -343,19 +452,15 @@ function pickBestImageUrl(list = []) {
   return jpeg || urls[urls.length - 1]
 }
 
-function pickImageUrls(images = []) {
-  const urls = []
-  for (const image of images) {
-    const display = (image?.url_list || []).filter(Boolean)
-    const download = (image?.download_url_list || []).filter(Boolean)
-    const url =
-      pickBestImageUrl(display.filter((item) => !isWatermarkedImageUrl(item))) ||
-      pickBestImageUrl(display) ||
-      pickBestImageUrl(download.filter((item) => !isWatermarkedImageUrl(item))) ||
-      pickBestImageUrl(download)
-    if (url) urls.push(url)
-  }
-  return urls
+function pickImageUrl(image = {}) {
+  const display = (image?.url_list || []).filter(Boolean)
+  const download = (image?.download_url_list || []).filter(Boolean)
+  return (
+    pickBestImageUrl(display.filter((item) => !isWatermarkedImageUrl(item))) ||
+    pickBestImageUrl(display) ||
+    pickBestImageUrl(download.filter((item) => !isWatermarkedImageUrl(item))) ||
+    pickBestImageUrl(download)
+  )
 }
 
 export function douyinItemToMedia(item, awemeId) {
@@ -366,22 +471,36 @@ export function douyinItemToMedia(item, awemeId) {
   const isPhoto = PHOTO_AWEME_TYPES.has(item.aweme_type) || images.length > 0
 
   if (isPhoto) {
-    pickImageUrls(images).forEach((url, index) => {
-      media.push({
-        type: 'image',
-        url,
-        thumbnail: url,
-        filename: `douyin-${awemeId}-${index + 1}.jpg`,
-      })
+    images.forEach((image, index) => {
+      const url = pickImageUrl(image)
+      if (url) {
+        media.push({
+          type: 'image',
+          url,
+          thumbnail: url,
+          filename: `douyin-${awemeId}-${index + 1}.jpg`,
+        })
+      }
+      const liveUrl = pickLivePhotoUrl(image)
+      if (liveUrl) {
+        media.push({
+          type: 'video',
+          url: liveUrl,
+          thumbnail: url,
+          filename: `douyin-${awemeId}-${index + 1}-live.mp4`,
+        })
+      }
     })
   } else {
-    const videoUrl = pickVideoUrl(item)
+    const qualities = collectVideoQualities(item)
+    const videoUrl = qualities[0]?.url
     if (videoUrl) {
       media.push({
         type: 'video',
         url: videoUrl,
         thumbnail: item.video?.cover?.url_list?.[0] || item.video?.origin_cover?.url_list?.[0],
         filename: `douyin-${awemeId}.mp4`,
+        qualities,
       })
     }
   }
@@ -393,8 +512,8 @@ export function douyinItemToMedia(item, awemeId) {
 }
 
 export async function parseDouyinShare(input) {
-  const awemeId = await resolveDouyinAwemeId(input)
-  const item = await fetchDouyinShareItem(awemeId)
+  const { awemeId, kind } = await resolveDouyinShareTarget(input)
+  const item = await fetchDouyinShareItem(awemeId, kind)
   const { title, media } = douyinItemToMedia(item, awemeId)
 
   if (media.length === 0) {

@@ -1,4 +1,9 @@
 import axios from 'axios'
+import {
+  fetchHtmlImpersonated,
+  postFormImpersonated,
+  getImpersonatedCookies,
+} from '../services/impersonatedHttp.js'
 import { extractUrlFromText, sanitizeShareText } from './url.js'
 
 const MOBILE_UA =
@@ -7,6 +12,11 @@ const MOBILE_UA =
 const ALLOWED_HOSTS = ['instagram.com', 'instagr.am']
 const SHORTCODE_RE = /\/(?:reel|reels|p|tv)\/([A-Za-z0-9_-]+)/i
 const CONTEXT_JSON_RE = /"contextJSON":("(?:\\.|[^"\\])*")/
+const SHORTCODE_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_'
+const IG_APP_ID = '936619743392459'
+const POLARIS_DOC_ID = '27130156389949648'
+const POLARIS_FRIENDLY_NAME = 'PolarisLoggedOutDesktopWWWPostRootContentQuery'
+const AUTH_TTL_MS = 30 * 60 * 1000
 
 const client = axios.create({
   timeout: 20000,
@@ -21,6 +31,8 @@ const pageClient = axios.create({
   validateStatus: (status) => status < 500,
   proxy: false,
 })
+
+let cachedAuth = { lsd: '', csrf: '', at: 0 }
 
 function mobileHeaders(referer) {
   return {
@@ -139,9 +151,104 @@ async function fetchEmbedMedia(shortcode) {
     throw err
   }
 
-  const err = new Error('无法解析该 Instagram 作品，链接可能无效或已设为私密')
-  err.code = 'PARSE_FAILED'
-  throw err
+  return null
+}
+
+function shortcodeToMediaId(shortcode = '') {
+  let value = 0n
+  for (const char of shortcode) {
+    const index = SHORTCODE_ALPHABET.indexOf(char)
+    if (index < 0) return ''
+    value = value * 64n + BigInt(index)
+  }
+  return value.toString()
+}
+
+function extractLsd(html = '') {
+  const eqmc = html.match(/<script[^>]*id="__eqmc"[^>]*>(\{.*?})<\/script>/s)
+  if (eqmc) {
+    try {
+      const parsed = JSON.parse(eqmc[1])
+      if (parsed?.l) return String(parsed.l)
+    } catch {
+      // fall through
+    }
+  }
+  return html.match(/\["LSD",\[\],\{"token":"([^"]+)"/)?.[1] || ''
+}
+
+function invalidateInstagramAuth() {
+  cachedAuth = { lsd: '', csrf: '', at: 0 }
+}
+
+async function ensureInstagramAuth() {
+  if (cachedAuth.lsd && cachedAuth.csrf && Date.now() - cachedAuth.at < AUTH_TTL_MS) {
+    return cachedAuth
+  }
+
+  const home = await fetchHtmlImpersonated('https://www.instagram.com/', {
+    headers: { 'Accept-Language': 'en-US,en;q=0.9' },
+  })
+  const lsd = extractLsd(home.html)
+  const csrf = (await getImpersonatedCookies()).csrftoken || ''
+  if (!lsd || !csrf) {
+    const err = new Error('Instagram 触发了访问限制，请稍后重试')
+    err.code = 'BLOCKED'
+    throw err
+  }
+
+  cachedAuth = { lsd, csrf, at: Date.now() }
+  return cachedAuth
+}
+
+function polarisApiHeaders(csrf, lsd, referer) {
+  return {
+    Accept: '*/*',
+    'Accept-Language': 'en-US,en;q=0.9',
+    'X-IG-App-ID': IG_APP_ID,
+    'X-ASBD-ID': '359341',
+    'X-IG-WWW-Claim': '0',
+    'X-FB-Friendly-Name': POLARIS_FRIENDLY_NAME,
+    'X-CSRFToken': csrf,
+    'X-FB-LSD': lsd,
+    'X-Requested-With': 'XMLHttpRequest',
+    Referer: referer || 'https://www.instagram.com/',
+    Origin: 'https://www.instagram.com',
+  }
+}
+
+async function fetchPolarisMedia(shortcode, referer) {
+  const mediaId = shortcodeToMediaId(shortcode)
+  if (!mediaId) return null
+
+  const { lsd, csrf } = await ensureInstagramAuth()
+  const response = await postFormImpersonated(
+    'https://www.instagram.com/api/graphql',
+    {
+      lsd,
+      fb_api_caller_class: 'RelayModern',
+      fb_api_req_friendly_name: POLARIS_FRIENDLY_NAME,
+      server_timestamps: 'true',
+      variables: JSON.stringify({ media_id: mediaId }),
+      doc_id: POLARIS_DOC_ID,
+    },
+    { headers: polarisApiHeaders(csrf, lsd, referer) }
+  )
+
+  const body = response.html || ''
+  if (response.status === 401 || /require_login|Please wait a few minutes/i.test(body)) {
+    invalidateInstagramAuth()
+    const err = new Error('Instagram 触发了访问限制，请稍后重试')
+    err.code = 'BLOCKED'
+    throw err
+  }
+
+  try {
+    const payload = JSON.parse(body)
+    return payload?.data?.xig_polaris_media?.if_not_gated_logged_out || null
+  } catch {
+    return null
+  }
 }
 
 function captionText(node) {
@@ -191,26 +298,104 @@ function collectMedia(root, shortcode) {
   return item ? [item] : []
 }
 
-export async function parseInstagramShare(input) {
-  const shortcode = await resolveInstagramShortcode(input)
-  const root = await fetchEmbedMedia(shortcode)
+function collectPolarisVideoQualities(item = {}) {
+  return [...(item.video_versions || [])]
+    .filter((version) => version?.url)
+    .map((version) => ({
+      url: version.url,
+      width: version.width,
+      height: version.height,
+      label: version.height ? `${version.height}p` : '',
+    }))
+    .sort((a, b) => (b.height || 0) - (a.height || 0) || (b.width || 0) - (a.width || 0))
+}
 
-  if (root.copyright_blocked) {
+function pickPolarisImageUrl(item = {}) {
+  const candidates = [...(item.image_versions2?.candidates || [])].sort(
+    (a, b) => (b.width || 0) - (a.width || 0)
+  )
+  return candidates[0]?.url || item.display_uri || ''
+}
+
+function polarisNodeToMedia(item, shortcode, index) {
+  if (!item || typeof item !== 'object') return null
+  const suffix = index == null ? '' : `-${index + 1}`
+  const qualities = collectPolarisVideoQualities(item)
+  const videoUrl = qualities[0]?.url || ''
+  if (item.media_type === 2 || videoUrl) {
+    if (!videoUrl) return null
+    return {
+      type: 'video',
+      url: videoUrl,
+      thumbnail: pickPolarisImageUrl(item),
+      filename: `instagram-${shortcode}${suffix}.mp4`,
+      qualities,
+    }
+  }
+
+  const imageUrl = pickPolarisImageUrl(item)
+  if (!imageUrl) return null
+  return {
+    type: 'image',
+    url: imageUrl,
+    thumbnail: imageUrl,
+    filename: `instagram-${shortcode}${suffix}.jpg`,
+  }
+}
+
+function collectPolarisMedia(item, shortcode) {
+  if (item?.carousel_media?.length) {
+    return item.carousel_media
+      .map((child, index) => polarisNodeToMedia(child, shortcode, index))
+      .filter(Boolean)
+  }
+  const media = polarisNodeToMedia(item, shortcode)
+  return media ? [media] : []
+}
+
+function unavailableError() {
+  const err = new Error('该 Instagram 作品无法公开访问，可能已删除、设为私密或未开放分享')
+  err.code = 'PARSE_FAILED'
+  return err
+}
+
+export async function parseInstagramShare(input) {
+  const sourceUrl = extractInstagramUrl(input)
+  const shortcode = await resolveInstagramShortcode(input)
+
+  const embedRoot = await fetchEmbedMedia(shortcode)
+  if (embedRoot?.copyright_blocked) {
     const err = new Error('该 Instagram 作品因版权限制无法下载')
     err.code = 'EXPIRED'
     throw err
   }
 
-  const media = collectMedia(root, shortcode)
-  if (media.length === 0) {
-    const err = new Error('该 Instagram 作品未包含可下载的图片或视频')
-    err.code = 'NO_MEDIA'
-    throw err
+  if (embedRoot) {
+    const media = collectMedia(embedRoot, shortcode)
+    if (media.length > 0) {
+      const owner = embedRoot.owner?.username || 'instagram'
+      const caption = captionText(embedRoot)
+      return {
+        shortcode,
+        title: caption || `@${owner} - Instagram 作品`,
+        media,
+      }
+    }
   }
 
-  const owner = root.owner?.username || 'instagram'
-  const caption = captionText(root)
-  const title = caption || `@${owner} - Instagram 作品`
+  const polarisItem = await fetchPolarisMedia(shortcode, sourceUrl)
+  if (polarisItem) {
+    const media = collectPolarisMedia(polarisItem, shortcode)
+    if (media.length > 0) {
+      const owner = polarisItem.user?.username || 'instagram'
+      const caption = (polarisItem.caption?.text || '').trim()
+      return {
+        shortcode,
+        title: caption || `@${owner} - Instagram 作品`,
+        media,
+      }
+    }
+  }
 
-  return { shortcode, title, media }
+  throw unavailableError()
 }

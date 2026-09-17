@@ -72,34 +72,51 @@ function pickImageUrl(image = {}) {
   return ''
 }
 
-function pickStreamUrl(stream = {}) {
-  const candidates = [
-    ...(Array.isArray(stream.h264) ? stream.h264 : []),
-    ...(Array.isArray(stream.h265) ? stream.h265 : []),
-  ]
-
-  for (const entry of candidates) {
-    const url = entry?.masterUrl || entry?.backupUrls?.[0]
-    if (url) return upgradeToHttps(url)
+function collectVideoQualities(note = {}, html = '') {
+  const video = note.video || {}
+  const qualities = []
+  const seen = new Set()
+  const add = (url, metadata = {}) => {
+    const resolved = upgradeToHttps(url)
+    if (!resolved || seen.has(resolved)) return
+    seen.add(resolved)
+    qualities.push({
+      url: resolved,
+      width: metadata.width,
+      height: metadata.height,
+      bitrate: metadata.bitrate,
+      label: metadata.label || (metadata.height ? `${metadata.height}p` : ''),
+    })
   }
 
-  return ''
-}
-
-function pickVideoUrl(note = {}, html = '') {
-  const video = note.video || {}
   const originKey = video.consumer?.originVideoKey
   if (originKey) {
-    return upgradeToHttps(`https://sns-video-bd.xhscdn.com/${originKey}`)
+    add(`https://sns-video-bd.xhscdn.com/${originKey}`, {
+      width: video.consumer?.width,
+      height: video.consumer?.height,
+      label: '原画',
+    })
   }
 
-  const streamUrl = pickStreamUrl(video.media?.stream || {})
-  if (streamUrl) return streamUrl
+  const stream = video.media?.stream || {}
+  const h264 = Array.isArray(stream.h264) ? stream.h264 : []
+  const h265 = Array.isArray(stream.h265) ? stream.h265 : []
+  const candidates = h264.length > 0 ? h264 : h265
+  for (const entry of candidates) {
+    add(entry?.masterUrl || entry?.backupUrls?.[0], {
+      width: entry?.width,
+      height: entry?.height,
+      bitrate: entry?.videoBitrate || entry?.bitrate,
+      label: entry?.height ? `${entry.height}p` : entry?.qualityType || '',
+    })
+  }
 
   const ogMatch = html.match(/<meta[^>]+property=["']og:video(?::url)?["'][^>]+content=["']([^"']+)["']/i)
-  if (ogMatch?.[1]) return upgradeToHttps(ogMatch[1])
+  if (ogMatch?.[1]) add(ogMatch[1], { label: '默认' })
 
-  return ''
+  return qualities.sort(
+    (a, b) => (b.height || 0) - (a.height || 0) || (b.bitrate || 0) - (a.bitrate || 0)
+  )
 }
 
 function pickVideoThumbnail(note = {}) {
@@ -120,13 +137,15 @@ export function xiaohongshuNoteToMedia(note, noteId, html = '') {
   const type = note.type || 'normal'
 
   if (type === 'video') {
-    const videoUrl = pickVideoUrl(note, html)
+    const qualities = collectVideoQualities(note, html)
+    const videoUrl = qualities[0]?.url
     if (videoUrl) {
       media.push({
         type: 'video',
         url: videoUrl,
         thumbnail: upgradeToHttps(pickVideoThumbnail(note)),
         filename: `xiaohongshu-${noteId}.mp4`,
+        qualities,
       })
     }
   }
