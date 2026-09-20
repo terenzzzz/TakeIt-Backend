@@ -200,7 +200,7 @@ const downloadUrl =
 | LURL | `lurl` | `lurl.cc` | 同 MyPPT |
 | PPT.cc | `pptcc` | `ppt.cc` | HTML 解析提取媒体 |
 | Twitter/X | `twitter` | `twitter.com` / `x.com` / `mobile.twitter.com` | 经 fxtwitter API 解析 |
-| 抖音 | `douyin` | `douyin.com` / `v.douyin.com` / `iesdouyin.com` | 短链跳转 + ttwid 会话 + Web Detail API；支持整段分享文案 |
+| 抖音 | `douyin` | `douyin.com` / `v.douyin.com` / `iesdouyin.com` | 短链跳转 + ttwid 会话 + Web Detail API；图文走 note 页移动端兜底；支持整段分享文案 |
 | 小红书 | `xiaohongshu` | `xiaohongshu.com` / `xhslink.com` / `xhslink.cn` / `rednote.com` | 短链跳转 + `INITIAL_STATE` 解析；支持整段分享文案 |
 
 子域名匹配：如 `www.douyin.com`、`www.xiaohongshu.com` 等均可识别。

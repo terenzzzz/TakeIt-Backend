@@ -188,7 +188,7 @@ GET /api/download?url=<encoded_url>&filename=<name>&inline=<0|1>
 |------|------|----------|------|
 | Twitter/X | twitter.com, x.com, mobile.twitter.com | 图片、视频 | 通过 [fxtwitter](https://api.fxtwitter.com) API 解析；支持多码率 MP4 |
 | Instagram | instagram.com, instagr.am | 图片、视频 | 解析公开 Embed 与 Polaris GraphQL；支持图集及多清晰度 |
-| 抖音 | douyin.com, v.douyin.com, iesdouyin.com | 图片、视频 | Web Detail API + Chromium 兜底；支持分享文案、图集及多清晰度 |
+| 抖音 | douyin.com, v.douyin.com, iesdouyin.com | 图片、视频 | Web Detail API + Chromium 兜底；支持分享文案、图文/图集及多清晰度 |
 | 小红书 | xiaohongshu.com, xhslink.com, xhslink.cn, rednote.com | 图片、视频 | 短链跳转、页面状态提取及多清晰度 |
 | MyPPT.cc | myppt.cc | 图片、视频 | curl-cffi 绕过 Cloudflare；密码页解锁；日期密码自动尝试 |
 | LURL.cc | lurl.cc | 图片、视频 | 同 MyPPT.cc |
@@ -206,12 +206,13 @@ GET /api/download?url=<encoded_url>&filename=<name>&inline=<0|1>
 ### 抖音解析
 
 1. 从输入中提取抖音链接（支持 `v.douyin.com` 短链及整段分享文案）
-2. 跟随短链跳转，解析作品 `aweme_id`
-3. 注册 `ttwid` 并访问 `douyin.com/video/{id}` 建立会话
-4. 优先调用 Douyin Web Detail API 获取标题、封面与播放地址
-5. 遇到 `Uifid Not Found`、`Sign Invalid` 等 Argus 拦截时，自动使用有界面 Chromium + Xvfb 执行官方安全脚本并拦截详情响应
-6. 浏览器上下文复用且请求串行，降低启动开销与风控概率
-7. 视频清晰度按分辨率去重；图集返回原图及实况视频
+2. 跟随短链跳转，解析作品 `aweme_id` 与类型（`video` / `note` / `slides`）
+3. 注册 `ttwid` 并访问对应作品页（视频走 `/video/{id}`，图文走 `/note/{id}`）建立会话
+4. 图文优先尝试 slides 接口，失败后再调用 Douyin Web Detail API 获取标题、封面与媒体地址
+5. 遇到 Argus 拦截（如 `Uifid Not Found`）或 slides 接口 `reason 8` 时，不立刻判失败，改走 Chromium 兜底
+6. 图文使用移动端上下文打开 `/note/` 与 `m.douyin.com/share/note/`，并轮询页面水合数据；视频仍走桌面 `/video/` 页。仅把好友可见、私密内容当作最终错误
+7. Chromium 与 Xvfb 实例复用，请求串行；浏览器崩溃后自动重启
+8. 视频清晰度按分辨率去重；图集返回图片及实况视频
 
 ### 小红书解析
 

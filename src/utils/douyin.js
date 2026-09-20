@@ -76,7 +76,10 @@ function mergeCookies(...parts) {
   return [...jar.entries()].map(([key, value]) => `${key}=${value}`).join('; ')
 }
 
-function videoPageUrl(awemeId) {
+function itemPageUrl(awemeId, kind = '') {
+  if (kind === 'note' || kind === 'slides') {
+    return `https://www.douyin.com/note/${awemeId}`
+  }
   return `https://www.douyin.com/video/${awemeId}`
 }
 
@@ -127,9 +130,9 @@ async function registerTtwid(force = false) {
   return cachedTtwid
 }
 
-async function buildDouyinSession(awemeId, forceTtwid = false) {
+async function buildDouyinSession(awemeId, forceTtwid = false, kind = '') {
   const ttwid = await registerTtwid(forceTtwid)
-  const referer = videoPageUrl(awemeId)
+  const referer = itemPageUrl(awemeId, kind)
   const ttwidCookie = [`ttwid=${ttwid}`]
 
   const pageResponse = await shareClient.get(referer, {
@@ -309,14 +312,14 @@ function parseDetailResponse(raw, awemeId) {
   return itemFromDetailPayload(raw, awemeId)
 }
 
-async function fetchDouyinDetailItem(awemeId) {
+async function fetchDouyinDetailItem(awemeId, kind = '') {
   let lastError = null
 
   for (let attempt = 0; attempt < 5; attempt += 1) {
     if (attempt > 0) await sleep(700 * attempt)
 
     try {
-      const { referer, cookie } = await buildDouyinSession(awemeId, attempt > 0)
+      const { referer, cookie } = await buildDouyinSession(awemeId, attempt > 0, kind)
       const params = new URLSearchParams({ aweme_id: awemeId })
       const response = await shareClient.get(`${DETAIL_API}&${params.toString()}`, {
         headers: desktopHeaders(cookie, referer),
@@ -375,7 +378,7 @@ export async function fetchDouyinShareItem(awemeId, kind = '') {
   }
 
   try {
-    return await fetchDouyinDetailItem(awemeId)
+    return await fetchDouyinDetailItem(awemeId, kind)
   } catch (err) {
     if (err.code === 'EXPIRED' || err.code === 'NO_MEDIA') throw err
     primaryError = err
@@ -383,7 +386,7 @@ export async function fetchDouyinShareItem(awemeId, kind = '') {
 
   try {
     const { fetchDouyinItemInBrowser } = await import('../services/douyinBrowser.js')
-    const item = await fetchDouyinItemInBrowser(awemeId)
+    const item = await fetchDouyinItemInBrowser(awemeId, kind)
     if (item) return item
   } catch (browserError) {
     if (primaryError?.code !== 'BLOCKED') throw primaryError || browserError
