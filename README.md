@@ -55,6 +55,7 @@ npm start      # 生产模式
 | `needsPassword` | 是否仍需密码 |
 | `mediaCount` | 媒体数量 |
 | `result` | 返回给客户端的完整解析结果（可展开 `media`） |
+| `client` | 调用来源：`web` / `ios` / `macos` / `unknown`。iOS 为 `TakeIt/iOS`，Mac 为 `TakeIt/macOS`，浏览器请求记为 `web` |
 | `clientIp` / `userAgent` | 请求来源 |
 | `createdAt` | 写入时间 |
 
@@ -67,6 +68,7 @@ src/
 ├── index.js              # 入口：Express 应用、CORS、速率限制
 ├── db/                   # MongoDB 连接与索引
 ├── routes/extract.js     # /api/extract、/api/download 路由
+├── routes/stats.js       # /api/stats 解析统计
 ├── extractors/           # 各平台解析器
 │   ├── myppt-lurl.js     # MyPPT / LURL 共用逻辑（密码解锁、媒体提取）
 │   ├── pptcc.js          # PPT.cc 解析
@@ -77,6 +79,7 @@ src/
 ├── services/
 │   ├── detector.js       # 平台识别
 │   ├── extractRecords.js # 解析记录异步写入 MongoDB
+│   ├── extractStats.js   # 解析记录汇总统计
 │   ├── fetcher.js        # axios 请求封装
 │   ├── impersonatedHttp.js  # curl-cffi 浏览器模拟请求
 │   ├── douyinBrowser.js  # Chromium 浏览器解析兜底与实例复用
@@ -102,6 +105,66 @@ src/
 `database` 可能为 `ok`、`disabled`（未配置 `MONGODB_URI`）或 `error`。
 
 解析成功、需要密码或失败时，后端会把记录异步写入 `extract_records` 集合（不含密码）。数据库异常不会阻断解析接口。
+
+### GET /api/stats
+
+返回解析记录汇总。全局数字是全部历史；各平台的 `recentSuccess` / `recentFailed` 是最近一段时间的次数，默认 24 小时。
+
+```
+GET /api/stats
+GET /api/stats?hours=168
+GET /api/stats?days=7
+```
+
+| 参数 | 必填 | 说明 |
+|------|------|------|
+| `hours` | 否 | 最近窗口，1 到 720 的整数，默认 `24`。从当前时刻往前推 |
+| `days` | 否 | 最近的北京时间自然日，1 到 31。含今天，从起始日 0 点算起。传入后忽略 `hours` |
+
+```json
+{
+  "database": "ok",
+  "generatedAt": "2026-10-09T03:40:00.000Z",
+  "timezone": "Asia/Shanghai",
+  "recentWindowHours": 24,
+  "total": 128,
+  "success": 100,
+  "failed": 20,
+  "needsPassword": 8,
+  "clients": { "web": 80, "ios": 30, "macos": 10, "unknown": 8 },
+  "platforms": [
+    {
+      "platform": "douyin",
+      "name": "抖音",
+      "success": 40,
+      "failed": 5,
+      "needsPassword": 1,
+      "recentSuccess": 6,
+      "recentFailed": 1,
+      "lastSuccessAt": "2026-10-09T03:12:00.000Z",
+      "lastFailedAt": "2026-10-08T18:04:00.000Z",
+      "days": [
+        { "date": "2026-10-08", "success": 2, "failed": 0, "needsPassword": 0 },
+        { "date": "2026-10-09", "success": 4, "failed": 1, "needsPassword": 0 }
+      ]
+    }
+  ]
+}
+```
+
+| 字段 | 说明 |
+|------|------|
+| `total` | 全部解析记录数 |
+| `success` | 状态为 `success` 的记录数 |
+| `failed` | 状态为 `error`，以及其它非成功、非待密码状态的记录数 |
+| `needsPassword` | 仍需密码、尚未完成解析的记录数，不计入失败 |
+| `clients` | 按调用来源统计的历史解析次数。没有 `client` 字段的旧记录计入 `unknown` |
+| `platforms` | 各支持平台都会返回；没有记录时次数为 0。无法识别平台的记录归入 `unknown` |
+| `recentSuccess` / `recentFailed` | 该平台在 `recentWindowHours` 内的成功、失败次数 |
+| `lastSuccessAt` / `lastFailedAt` | 该平台最近一次成功或失败的时间，没有则为 `null` |
+| `days` | 最近窗口所跨的北京时间日期。每一天只计入窗口内的记录，方便画出每日成败 |
+
+数据库未连接时仍返回 `200`，`database` 为 `disabled`，次数为 0。数据库查询异常时返回 `503`。`hours` 不合法时返回 `400`，`error` 为 `INVALID_WINDOW`。每分钟最多 60 次。
 
 ### POST /api/extract
 

@@ -33,6 +33,8 @@ export async function initDatabase() {
     { key: { platform: 1 } },
     { key: { status: 1 } },
     { key: { resolvedUrl: 1 } },
+    { key: { platform: 1, status: 1, createdAt: -1 } },
+    { key: { client: 1, createdAt: -1 } },
   ])
 
   await database.command({ ping: 1 })

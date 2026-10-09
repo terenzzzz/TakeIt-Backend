@@ -1,4 +1,5 @@
 import { dbEnabled, getExtractRecords } from '../db/client.js'
+import { detectClient } from '../utils/clientSource.js'
 
 function asText(value, maxLength = 4000) {
   if (typeof value !== 'string') return null
@@ -22,6 +23,7 @@ export function saveExtractRecord(record = {}) {
     needsPassword: Boolean(record.needsPassword),
     mediaCount: Number.isFinite(record.mediaCount) ? Math.max(0, record.mediaCount) : 0,
     result: record.result ? structuredClone(record.result) : null,
+    client: detectClient(record.userAgent),
     clientIp: asText(record.clientIp, 128),
     userAgent: asText(record.userAgent, 500),
     createdAt: new Date(),

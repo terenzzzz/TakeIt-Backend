@@ -4,6 +4,7 @@ import cors from 'cors'
 import rateLimit from 'express-rate-limit'
 import { checkDatabase, initDatabase } from './db/client.js'
 import extractRoutes from './routes/extract.js'
+import statsRoutes from './routes/stats.js'
 
 const app = express()
 const PORT = process.env.PORT || 3001
@@ -20,10 +21,18 @@ const limiter = rateLimit({
 })
 app.use('/api/extract', limiter)
 
+const statsLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 60,
+  message: { error: 'RATE_LIMIT', message: '请求过于频繁，请稍后重试' },
+})
+app.use('/api/stats', statsLimiter)
+
 app.get('/health', async (_req, res) => {
   res.json({ status: 'ok', database: await checkDatabase() })
 })
 
+app.use('/api/stats', statsRoutes)
 app.use('/api', extractRoutes)
 
 app.use((err, _req, res, _next) => {
