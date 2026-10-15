@@ -1,16 +1,19 @@
 import axios from 'axios'
 import { extractUrlFromText, sanitizeShareText } from './url.js'
 
+// Android Chrome UA：iesdouyin 分享页在带 ttwid 时会 SSR 下发 videoInfoRes
 const MOBILE_UA =
-  'Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1'
+  'Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36'
 
 const DESKTOP_UA =
-  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36'
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
 
 const DOUYIN_URL_RE =
   /https?:\/\/(?:[A-Za-z0-9-]+\.)*(?:douyin|iesdouyin)\.com\/[A-Za-z0-9_.?=&%/-]*[A-Za-z0-9_/-]/i
 
 const PATH_META_RE = /\/(video|note|slides)\/(\d+)/
+const ROUTER_DATA_RE = /window\._ROUTER_DATA\s*=\s*(\{[\s\S]*?\})\s*;?\s*<\/script>/
+const CHALLENGE_MARKERS_RE = /waf-jschallenge|out-sha256\.js|byted_acrawler|captcha/i
 const DETAIL_API =
   'https://www.douyin.com/aweme/v1/web/aweme/detail/?device_platform=webapp&aid=6383&channel=channel_pc_web'
 const SLIDES_API = 'https://www.iesdouyin.com/web/api/v2/aweme/slidesinfo/'
@@ -19,6 +22,7 @@ const PHOTO_AWEME_TYPES = new Set([2, 68])
 const SLIDES_KINDS = new Set(['note', 'slides'])
 const ALLOWED_HOSTS = ['douyin.com', 'iesdouyin.com']
 const TTWID_TTL_MS = 60 * 60 * 1000
+const DETAIL_MAX_ATTEMPTS = 1
 
 const client = axios.create({
   timeout: 20000,
@@ -37,10 +41,12 @@ const shareClient = axios.create({
 let cachedTtwid = ''
 let cachedTtwidAt = 0
 
-function mobileHeaders(referer) {
+function mobileHeaders(referer, cookie = '') {
   return {
     'User-Agent': MOBILE_UA,
+    Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
     'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
+    ...(cookie ? { Cookie: cookie } : {}),
     ...(referer ? { Referer: referer } : {}),
   }
 }
@@ -83,8 +89,12 @@ function itemPageUrl(awemeId, kind = '') {
   return `https://www.douyin.com/video/${awemeId}`
 }
 
-function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms))
+function shareNoteUrl(awemeId) {
+  return `https://www.iesdouyin.com/share/note/${awemeId}/`
+}
+
+function shareVideoUrl(awemeId) {
+  return `https://www.iesdouyin.com/share/video/${awemeId}/`
 }
 
 function invalidateTtwidCache() {
@@ -217,7 +227,9 @@ async function resolveDouyinShareTarget(input) {
     }
 
     const meta = extractPostMeta(current)
-    if (meta.awemeId) return meta
+    if (meta.awemeId) {
+      return { ...meta, resolvedUrl: current }
+    }
 
     if (hostname.startsWith('live.')) {
       const err = new Error('暂不支持抖音直播链接')
@@ -312,12 +324,102 @@ function parseDetailResponse(raw, awemeId) {
   return itemFromDetailPayload(raw, awemeId)
 }
 
+function videoInfoFromRouter(router) {
+  const loader = router?.loaderData
+  if (!loader || typeof loader !== 'object') return null
+  for (const page of Object.values(loader)) {
+    if (page && typeof page === 'object' && page.videoInfoRes) {
+      return page.videoInfoRes
+    }
+  }
+  return null
+}
+
+function itemFromShareHtml(html, awemeId) {
+  const text = String(html || '')
+  if (!text) return null
+
+  if (CHALLENGE_MARKERS_RE.test(text) && !text.includes('videoInfoRes')) {
+    const err = new Error('抖音触发了访问限制，请稍后重试')
+    err.code = 'BLOCKED'
+    err.browserRequired = true
+    throw err
+  }
+
+  const match = text.match(ROUTER_DATA_RE)
+  if (!match) return null
+
+  let router
+  try {
+    router = JSON.parse(match[1])
+  } catch {
+    return null
+  }
+
+  const info = videoInfoFromRouter(router)
+  if (!info) return null
+
+  if (info.filter_list?.[0] || info.filter_detail) {
+    throwIfFiltered(info, awemeId)
+  }
+
+  const item = info.item_list?.[0]
+  if (!item || typeof item !== 'object') return null
+
+  const itemId = String(item.aweme_id || item.awemeId || '')
+  if (itemId && itemId !== String(awemeId)) return null
+  return item
+}
+
+async function fetchDouyinSharePageItem(awemeId, forceTtwid = false) {
+  let lastError = null
+
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      const ttwid = await registerTtwid(forceTtwid || attempt > 0)
+      const url = shareNoteUrl(awemeId)
+      const response = await shareClient.get(url, {
+        headers: mobileHeaders(url, `ttwid=${ttwid}`),
+        responseType: 'text',
+        transformResponse: [(data) => data],
+      })
+
+      const item = itemFromShareHtml(response.data, awemeId)
+      if (item) return item
+
+      // 部分情况下 note 页壳子为空，再试 video 分享页
+      const videoResponse = await shareClient.get(shareVideoUrl(awemeId), {
+        headers: mobileHeaders(shareVideoUrl(awemeId), `ttwid=${ttwid}`),
+        responseType: 'text',
+        transformResponse: [(data) => data],
+      })
+      const videoItem = itemFromShareHtml(videoResponse.data, awemeId)
+      if (videoItem) return videoItem
+
+      lastError = Object.assign(new Error('抖音分享页未返回作品数据'), { code: 'PARSE_FAILED' })
+      invalidateTtwidCache()
+    } catch (err) {
+      if (err.code === 'EXPIRED' || err.code === 'NO_MEDIA') throw err
+      if (err.code === 'BLOCKED') {
+        invalidateTtwidCache()
+        lastError = err
+        continue
+      }
+      lastError = err
+      invalidateTtwidCache()
+    }
+  }
+
+  const err = new Error(lastError?.message || '抖音分享页未返回作品数据')
+  err.code = lastError?.code === 'BLOCKED' ? 'BLOCKED' : 'PARSE_FAILED'
+  if (lastError?.browserRequired) err.browserRequired = true
+  throw err
+}
+
 async function fetchDouyinDetailItem(awemeId, kind = '') {
   let lastError = null
 
-  for (let attempt = 0; attempt < 5; attempt += 1) {
-    if (attempt > 0) await sleep(700 * attempt)
-
+  for (let attempt = 0; attempt < DETAIL_MAX_ATTEMPTS; attempt += 1) {
     try {
       const { referer, cookie } = await buildDouyinSession(awemeId, attempt > 0, kind)
       const params = new URLSearchParams({ aweme_id: awemeId })
@@ -331,9 +433,8 @@ async function fetchDouyinDetailItem(awemeId, kind = '') {
       if (err.code === 'EXPIRED' || err.code === 'NO_MEDIA') throw err
       if (err.code === 'BLOCKED') {
         invalidateTtwidCache()
-        if (err.browserRequired) throw err
-        lastError = err
-        continue
+        // Argus 对机房 IP 基本必拦，不要空转重试
+        throw err
       }
       lastError = err
     }
@@ -365,23 +466,32 @@ async function fetchDouyinSlidesItem(awemeId) {
 }
 
 export async function fetchDouyinShareItem(awemeId, kind = '') {
-  const preferSlides = SLIDES_KINDS.has(kind)
   let primaryError = null
 
-  if (preferSlides) {
+  // 主路径：移动端分享页 SSR（ttwid + iesdouyin share/note），绕开 PC Argus
+  try {
+    return await fetchDouyinSharePageItem(awemeId)
+  } catch (err) {
+    if (err.code === 'EXPIRED' || err.code === 'NO_MEDIA') throw err
+    primaryError = err
+  }
+
+  // 图文偶发可走 slides；reason=8 常见且不代表作品不可用，失败后继续
+  if (SLIDES_KINDS.has(kind)) {
     try {
       return await fetchDouyinSlidesItem(awemeId)
     } catch (err) {
       if (err.code === 'EXPIRED' || err.code === 'NO_MEDIA') throw err
-      primaryError = err
+      primaryError = primaryError || err
     }
   }
 
+  // PC Web Detail 最多试一次；Argus 拦截则立刻放弃
   try {
     return await fetchDouyinDetailItem(awemeId, kind)
   } catch (err) {
     if (err.code === 'EXPIRED' || err.code === 'NO_MEDIA') throw err
-    primaryError = err
+    primaryError = primaryError || err
   }
 
   try {

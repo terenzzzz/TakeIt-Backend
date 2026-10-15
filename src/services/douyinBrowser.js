@@ -1,14 +1,15 @@
 import { chromium } from 'playwright-core'
 import { spawn } from 'node:child_process'
 
-const BROWSER_TIMEOUT_MS = 35000
-const RESPONSE_TIMEOUT_MS = 12000
+const BROWSER_TIMEOUT_MS = 25000
+const RESPONSE_TIMEOUT_MS = 8000
 const HYDRATE_POLL_MS = 400
+const BROWSER_JOB_TIMEOUT_MS = 45000
 const NOTE_KINDS = new Set(['note', 'slides'])
 const DESKTOP_UA =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
 const MOBILE_UA =
-  'Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1'
+  'Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36'
 const CHROME_ARGS = [
   '--disable-dev-shm-usage',
   '--no-sandbox',
@@ -373,23 +374,18 @@ async function extractHydratedItem(page, awemeId) {
 }
 
 function browseAttemptsFor(awemeId, kind = '') {
-  const noteUrls = [
-    `https://www.douyin.com/note/${awemeId}`,
-    `https://m.douyin.com/share/note/${awemeId}`,
-  ]
-  const videoUrls = [
-    `https://www.douyin.com/video/${awemeId}`,
+  // 优先 iesdouyin 移动分享页（与 HTTP 主路径一致），桌面站仅作兜底
+  const shareUrls = [
+    `https://www.iesdouyin.com/share/note/${awemeId}/`,
     `https://www.iesdouyin.com/share/video/${awemeId}/`,
   ]
-  if (NOTE_KINDS.has(kind)) {
-    return [
-      { mobile: true, urls: noteUrls },
-      { mobile: false, urls: videoUrls },
-    ]
-  }
+  const desktopUrls = NOTE_KINDS.has(kind)
+    ? [`https://www.douyin.com/note/${awemeId}`, `https://www.douyin.com/video/${awemeId}`]
+    : [`https://www.douyin.com/video/${awemeId}`, `https://www.douyin.com/note/${awemeId}`]
+
   return [
-    { mobile: false, urls: videoUrls },
-    { mobile: true, urls: noteUrls },
+    { mobile: true, urls: shareUrls },
+    { mobile: false, urls: desktopUrls },
   ]
 }
 
@@ -449,21 +445,54 @@ function wrapBrowserError(cause) {
   return err
 }
 
+async function withJobTimeout(task, timeoutMs = BROWSER_JOB_TIMEOUT_MS) {
+  let timer = null
+  let timedOut = false
+  const timeoutPromise = new Promise((_, reject) => {
+    timer = setTimeout(() => {
+      timedOut = true
+      const err = new Error(`抖音浏览器解析超时（${Math.round(timeoutMs / 1000)}s）`)
+      err.code = 'BLOCKED'
+      err.timedOut = true
+      reject(err)
+    }, timeoutMs)
+  })
+
+  try {
+    return await Promise.race([task(), timeoutPromise])
+  } finally {
+    if (timer) clearTimeout(timer)
+    if (timedOut) {
+      console.warn('Douyin browser job timed out, resetting browser')
+      await resetBrowserState().catch(() => {})
+    }
+  }
+}
+
 export async function fetchDouyinItemInBrowser(awemeId, kind = '') {
   return withBrowserLock(async () => {
-    try {
-      return await fetchInBrowser(awemeId, kind)
-    } catch (cause) {
-      if (cause.code === 'EXPIRED' || cause.code === 'NO_MEDIA') throw cause
-      if (!isClosedError(cause)) throw wrapBrowserError(cause)
-      console.warn('Douyin browser died, relaunching:', cause.message)
-      await resetBrowserState()
+    const run = async () => {
       try {
         return await fetchInBrowser(awemeId, kind)
-      } catch (retryCause) {
-        if (retryCause.code === 'EXPIRED' || retryCause.code === 'NO_MEDIA') throw retryCause
-        throw wrapBrowserError(retryCause)
+      } catch (cause) {
+        if (cause.code === 'EXPIRED' || cause.code === 'NO_MEDIA') throw cause
+        if (!isClosedError(cause)) throw wrapBrowserError(cause)
+        console.warn('Douyin browser died, relaunching:', cause.message)
+        await resetBrowserState()
+        try {
+          return await fetchInBrowser(awemeId, kind)
+        } catch (retryCause) {
+          if (retryCause.code === 'EXPIRED' || retryCause.code === 'NO_MEDIA') throw retryCause
+          throw wrapBrowserError(retryCause)
+        }
       }
+    }
+
+    try {
+      return await withJobTimeout(run)
+    } catch (cause) {
+      if (cause.timedOut) throw wrapBrowserError(cause)
+      throw cause
     }
   })
 }
