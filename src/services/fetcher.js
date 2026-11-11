@@ -141,6 +141,15 @@ function getRefererForUrl(url) {
     ) {
       return 'https://www.instagram.com/'
     }
+    if (
+      hostname.includes('weibo.com') ||
+      hostname.includes('weibo.cn') ||
+      hostname.includes('sinaimg.cn') ||
+      hostname.includes('weibocdn.com') ||
+      hostname.includes('sinaimg.com')
+    ) {
+      return 'https://weibo.com/'
+    }
   } catch {
     return undefined
   }

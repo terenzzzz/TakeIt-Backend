@@ -85,7 +85,7 @@ Content-Type：`application/json`（除下载接口返回二进制流）
 
 | 字段 | 类型 | 说明 |
 |------|------|------|
-| `platform` | `string` | 平台标识：`myppt` / `lurl` / `pptcc` / `twitter` / `douyin` / `xiaohongshu` |
+| `platform` | `string` | 平台标识：`myppt` / `lurl` / `pptcc` / `twitter` / `douyin` / `xiaohongshu` / `instagram` / `weibo` |
 | `title` | `string` | 页面、笔记或推文标题 |
 | `needsPassword` | `boolean` | 需要密码且尚未解锁时为 `true`，此时 `media` 为空数组 |
 | `media` | `array` | 媒体列表 |
@@ -202,8 +202,10 @@ const downloadUrl =
 | Twitter/X | `twitter` | `twitter.com` / `x.com` / `mobile.twitter.com` | 经 fxtwitter API 解析 |
 | 抖音 | `douyin` | `douyin.com` / `v.douyin.com` / `iesdouyin.com` | 短链跳转 + ttwid 移动分享页 SSR 为主，PC Detail / Chromium 兜底；支持整段分享文案与图文/图集 |
 | 小红书 | `xiaohongshu` | `xiaohongshu.com` / `xhslink.com` / `xhslink.cn` / `rednote.com` | 短链跳转 + `INITIAL_STATE` 解析；支持整段分享文案 |
+| Instagram | `instagram` | `instagram.com` / `instagr.am` | 公开 Embed / Polaris GraphQL；支持图集与多清晰度 |
+| 微博 | `weibo` | `weibo.com` / `weibo.cn` / `m.weibo.cn` | 移动端 `statuses/show`；支持图集、视频、实况图与转发原博媒体 |
 
-子域名匹配：如 `www.douyin.com`、`www.xiaohongshu.com` 等均可识别。
+子域名匹配：如 `www.douyin.com`、`www.xiaohongshu.com`、`m.weibo.cn` 等均可识别。
 
 ---
 

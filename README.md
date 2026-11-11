@@ -75,7 +75,8 @@ src/
 │   ├── twitter.js        # Twitter/X 解析（fxtwitter API）
 │   ├── douyin.js         # 抖音解析
 │   ├── xiaohongshu.js    # 小红书解析
-│   └── instagram.js      # Instagram 解析
+│   ├── instagram.js      # Instagram 解析
+│   └── weibo.js          # 微博解析
 ├── services/
 │   ├── detector.js       # 平台识别
 │   ├── extractRecords.js # 解析记录异步写入 MongoDB
@@ -88,6 +89,7 @@ src/
     ├── douyin.js         # 抖音短链解析、ttwid 会话、Web API 提取
     ├── xiaohongshu.js    # 小红书短链解析、INITIAL_STATE 提取
     ├── instagram.js      # Instagram shortcode、embed contextJSON 提取
+    ├── weibo.js          # 微博博文 ID 提取、移动端 statuses/show 解析
     ├── text.js           # JSON 安全文本截断（避免切断 emoji）
     └── ...               # URL、文件名、密码等工具函数
 ```
@@ -213,7 +215,7 @@ GET /api/stats?days=7
 
 | 字段 | 说明 |
 |------|------|
-| `platform` | 平台标识：`myppt` / `lurl` / `pptcc` / `twitter` / `douyin` / `xiaohongshu` / `instagram` |
+| `platform` | 平台标识：`myppt` / `lurl` / `pptcc` / `twitter` / `douyin` / `xiaohongshu` / `instagram` / `weibo` |
 | `needsPassword` | 页面需要密码且尚未解锁时为 `true`，此时 `media` 为空 |
 | `media[].type` | 媒体类型：`image` / `video` / `audio` |
 | `media[].qualities` | 视频可用清晰度列表，按质量从高到低排列；平台仅返回单一源时可能省略 |
@@ -253,6 +255,7 @@ GET /api/download?url=<encoded_url>&filename=<name>&inline=<0|1>
 | Instagram | instagram.com, instagr.am | 图片、视频 | 解析公开 Embed 与 Polaris GraphQL；支持图集及多清晰度 |
 | 抖音 | douyin.com, v.douyin.com, iesdouyin.com | 图片、视频 | 移动分享页 SSR（ttwid）为主，PC Detail / Chromium 兜底；支持分享文案、图文/图集及多清晰度 |
 | 小红书 | xiaohongshu.com, xhslink.com, xhslink.cn, rednote.com | 图片、视频 | 短链跳转、页面状态提取及多清晰度 |
+| 微博 | weibo.com, weibo.cn, m.weibo.cn | 图片、视频 | 移动端 statuses/show 接口；支持图集、视频、实况图与转发原博媒体 |
 | MyPPT.cc | myppt.cc | 图片、视频 | curl-cffi 绕过 Cloudflare；密码页解锁；日期密码自动尝试 |
 | LURL.cc | lurl.cc | 图片、视频 | 同 MyPPT.cc |
 | PPT.cc | ppt.cc | 图片、视频 | HTML 解析，从 `<video>` / `<img>` / 脚本中提取 |

@@ -2,7 +2,7 @@ const URL_IN_TEXT_RE =
   /https?:\/\/(?:[A-Za-z0-9-]+\.)+[A-Za-z]{2,}(?:\/[A-Za-z0-9_.?=&%/-]*)?[A-Za-z0-9_/-]/gi
 
 const BARE_SHORT_LINK_RE =
-  /(?:^|[\s"'<(【])((?:[A-Za-z0-9-]+\.)+(?:douyin|iesdouyin|xiaohongshu|xhslink|instagram|instagr)\.[A-Za-z]{2,}\/[A-Za-z0-9_/-]+)/i
+  /(?:^|[\s"'<(【])((?:[A-Za-z0-9-]+\.)+(?:douyin|iesdouyin|xiaohongshu|xhslink|instagram|instagr|weibo)\.[A-Za-z]{2,}\/[A-Za-z0-9_/-]+)/i
 
 const UNICODE_SPACE_RE = /[\u00A0\u1680\u2000-\u200A\u2028\u2029\u202F\u205F\u3000]/g
 const INVISIBLE_CHARS_RE =

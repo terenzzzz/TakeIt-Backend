@@ -16,6 +16,11 @@ const PLATFORMS = [
     name: 'Instagram',
     hosts: ['instagram.com', 'instagr.am'],
   },
+  {
+    id: 'weibo',
+    name: '微博',
+    hosts: ['weibo.com', 'weibo.cn'],
+  },
 ]
 
 function hostMatches(hostname, hosts) {
